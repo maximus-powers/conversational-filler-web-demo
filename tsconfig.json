@@ -1,0 +1,4 @@
+{
+  "extends": "@convo-filler/typescript-config/base.json"
+}
+

@@ -1,0 +1,1 @@
+export { default } from "@convo-filler/ui/postcss.config";
