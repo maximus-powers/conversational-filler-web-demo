@@ -167,7 +167,7 @@ export function Chat() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Bot className="h-5 w-5 text-primary" />
-            <span className="font-semibold">AI Conversation Filler</span>
+            <span className="font-semibold">Conversational Filler Demo</span>
           </div>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -185,7 +185,7 @@ export function Chat() {
         <div className="text-xs text-muted-foreground">
           {modelLoading
             ? modelLoadingProgress || "Loading SmolLM..."
-            : "SmolLM runs in browser • OpenAI provides thoughts"}
+            : "Fine-tuned SmolLM runs in browser • OpenAI provides thoughts"}
         </div>
       </div>
 
