@@ -152,7 +152,7 @@ export async function ThoughtProcessor(config: {
     
     waitForCompletion: async () => {
       while (state.isProcessing || state.thoughtsToProcess.length > 0) {
-        await Promise.resolve();
+        await new Promise(resolve => setTimeout(resolve, 0)); // timeout needed or page become unresponsive
       }
     },
     
