@@ -1,29 +1,7 @@
 import { pipeline } from "@huggingface/transformers";
+import PQueue from 'p-queue';
 
-// can't run models in parallel on webgpu, so queueing inferences
-class GPUInferenceQueue {
-  private tail: Promise<any>;
-  constructor() {
-    this.tail = Promise.resolve();
-  }
-  enqueue<T>(task: () => Promise<T>): Promise<T> {
-    const next = this.tail.then(async () => {
-      try {
-        return await task();
-      } catch (error) {
-        if (error instanceof Error && 
-            (error.message.includes("Cannot read properties of null") ||
-             error.message.includes("device lost") ||
-             error.message.includes("context lost"))) {
-          console.warn("WebGPU session corruption detected, implementing recovery delay");
-        }
-        throw error; //rethrow
-      }
-    });
-    this.tail = next.catch(() => {}); // catch errors to not break queue
-    return next;
-  }
-}
+// We'll use PQueue for better queue management
 
 interface ProcessorConfig {
   onThoughtReceived?: (thought: string, index: number) => void;
@@ -45,7 +23,8 @@ export class ResponseProcessor {
   private enableTTS: boolean;
   private speakerEmbeddings = 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin';
   private abortSignal: AbortSignal | null = null;
-  private inferenceQueue: GPUInferenceQueue;
+  private inferenceQueue: PQueue; // webgpu inference queue (resources can't be used by more than one TF pipeline at once)
+  private audioQueue: PQueue; // audip playback queue because it was playing multiple at a time
   private currentOnUpdate: ((content: string) => void) | null = null;
   private onThoughtReceived?: (thought: string, index: number) => void;
   private state: ProcessorState;
@@ -54,7 +33,8 @@ export class ResponseProcessor {
   constructor(config: ProcessorConfig) {
     this.onThoughtReceived = config.onThoughtReceived;
     this.enableTTS = config.enableTTS || false;
-    this.inferenceQueue = new GPUInferenceQueue();
+    this.inferenceQueue = new PQueue({ concurrency: 1 });
+    this.audioQueue = new PQueue({ concurrency: 1 });
     
     // init state
     this.state = {
@@ -96,25 +76,28 @@ export class ResponseProcessor {
   }
 
   private async playAudio(audioData: Float32Array, sampleRate: number): Promise<void> {
-    try {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const audioBuffer = audioContext.createBuffer(1, audioData.length, sampleRate);
-      audioBuffer.copyToChannel(audioData, 0);
-      
-      const source = audioContext.createBufferSource();
-      source.buffer = audioBuffer;
-      source.connect(audioContext.destination);
-      
-      return new Promise((resolve) => {
-        source.onended = () => {
-          audioContext.close();
-          resolve();
-        };
-        source.start();
-      });
-    } catch (error) {
-      console.warn("Failed to play audio:", error);
-    }
+    // Queue audio playback to prevent overlap
+    return this.audioQueue.add(async () => {
+      try {
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const audioBuffer = audioContext.createBuffer(1, audioData.length, sampleRate);
+        audioBuffer.copyToChannel(audioData, 0);
+        
+        const source = audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+        
+        return new Promise<void>((resolve) => {
+          source.onended = () => {
+            audioContext.close();
+            resolve();
+          };
+          source.start();
+        });
+      } catch (error) {
+        console.warn("Failed to play audio:", error);
+      }
+    });
   }
 
   private async speakText(text: string): Promise<void> {
@@ -124,7 +107,7 @@ export class ResponseProcessor {
 
     try {
       // queue tts synthesis to prevent webgpu conflicts
-      const result = await this.inferenceQueue.enqueue(() =>
+      const result = await this.inferenceQueue.add(() =>
         this.ttsPipeline(text, { 
           speaker_embeddings: this.speakerEmbeddings 
         })
@@ -156,7 +139,7 @@ export class ResponseProcessor {
     // first response doesn't wait for thoughts
     const immediatePrompt = `<|im_start|>user\n${currentInput}<|im_end|>\n<|im_start|>assistant\n`;
     try {
-      const immediateResult = await this.inferenceQueue.enqueue(() => 
+      const immediateResult = await this.inferenceQueue.add(() => 
         this.lmPipeline(immediatePrompt, {
           max_new_tokens: 50,
           temperature: 0.7,
@@ -216,7 +199,7 @@ export class ResponseProcessor {
 
     // run through local model
     try {
-      const result = await this.inferenceQueue.enqueue(() =>
+      const result = await this.inferenceQueue.add(() =>
         this.lmPipeline(contextPrompt, {
           max_new_tokens: 50,
           temperature: 0.7,
@@ -305,7 +288,7 @@ export class ResponseProcessor {
     
     try {
       if (!this.ttsPipeline) {
-        this.ttsPipeline = await this.inferenceQueue.enqueue(() =>
+        this.ttsPipeline = await this.inferenceQueue.add(() =>
           pipeline('text-to-speech', 'Xenova/speecht5_tts', { dtype: 'fp32' })
         ) as any;
         console.log("TTS pipeline ready");
