@@ -1,11 +1,10 @@
 "use client";
 
 import { Button } from "@convo-filler/ui/components/button";
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Bot, User, Loader2, Send } from "lucide-react";
-import { pipeline } from "@huggingface/transformers";
 import { ThemeToggle } from "./theme-toggle";
-import { ThoughtProcessor } from "../app/lib/thought-processor";
+import { ResponseProcessor } from "../app/lib/response-processor";
 
 interface Message {
   id: string;
@@ -20,36 +19,30 @@ export function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [modelLoading, setModelLoading] = useState(true);
   const [modelLoadingProgress, setModelLoadingProgress] = useState<string>("");
-  const pipelineRef = useRef<any>(null);
+  const processorRef = useRef<ResponseProcessor | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // init smollm in browser with webgpu
+  // init response processor
   useEffect(() => {
-    const initializeModel = async () => {
+    const initializeProcessor = async () => {
       setModelLoadingProgress("Loading local model...");
-      pipelineRef.current = await pipeline(
-        "text-generation",
-        "maximuspowers/smollm-convo-filler-onnx-official",
-        {
-          dtype: "fp32",
-          device: "webgpu",
-        },
-      );;
-      console.log("Local LM pipeline ready");
+      
+      processorRef.current = new ResponseProcessor({});
+      
+      await processorRef.current.initialize();
+      console.log("Response processor ready");
       setModelLoading(false);
       setModelLoadingProgress("");
     };
-    initializeModel();
+    initializeProcessor();
     return () => {
-      if (pipelineRef.current) {
-        pipelineRef.current = null;
-      }
+      processorRef.current = null;
     };
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || modelLoading || !pipelineRef.current)
+    if (!input.trim() || isLoading || modelLoading || !processorRef.current)
       return;
 
     const userMessage: Message = {
@@ -80,12 +73,11 @@ export function Chat() {
     abortControllerRef.current = new AbortController();
 
     try {
-      // init thought processor
-      const thoughtProcessor = await ThoughtProcessor({
-        pipeline: pipelineRef.current,
-        currentInput: currentInput,
-        abortSignal: abortControllerRef.current.signal,
-        onUpdate: (processedContent) => {
+      // start gen
+      await processorRef.current!.generate(
+        currentInput, 
+        abortControllerRef.current.signal,
+        (processedContent) => {
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMessageId
@@ -93,8 +85,8 @@ export function Chat() {
                 : msg,
             ),
           );
-        }, // updates placeholder directly after each thought chunk gets processed
-      });
+        }
+      );
 
       // call api for provider thoughts
       const response = await fetch("/api/chat-thoughts", {
@@ -124,9 +116,9 @@ export function Chat() {
           break;
         }
         const chunk = decoder.decode(value, { stream: true });
-        thoughtProcessor.processThoughtChunk(chunk);
+        processorRef.current!.processThoughtChunk(chunk);
       }
-      await thoughtProcessor.waitForCompletion();
+      await processorRef.current!.waitForCompletion();
 
     } catch (error) {
       console.error("Chat error:", error);
