@@ -2,6 +2,7 @@ import { pipeline } from "@huggingface/transformers";
 
 interface ProcessorConfig {
   onThoughtReceived?: (thought: string, index: number) => void;
+  enableTTS?: boolean;
 }
 
 interface ProcessorState {
@@ -15,6 +16,9 @@ interface ProcessorState {
 
 export class ResponseProcessor {
   private lmPipeline: any;
+  private ttsPipeline: any | null = null;
+  private enableTTS: boolean;
+  private speakerEmbeddings = 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin';
   private abortSignal: AbortSignal | null = null;
   private currentOnUpdate: ((content: string) => void) | null = null;
   private onThoughtReceived?: (thought: string, index: number) => void;
@@ -23,6 +27,7 @@ export class ResponseProcessor {
 
   constructor(config: ProcessorConfig) {
     this.onThoughtReceived = config.onThoughtReceived;
+    this.enableTTS = config.enableTTS || false;
     
     // init state
     this.state = {
@@ -44,6 +49,63 @@ export class ResponseProcessor {
         device: "webgpu",
       },
     );
+
+    if (this.enableTTS) {
+      try {
+        this.ttsPipeline = await pipeline(
+          'text-to-speech', 
+          'Xenova/speecht5_tts',
+          { 
+            dtype: 'q8',
+            device: 'webgpu' 
+          }
+        );
+        console.log("TTS pipeline ready");
+      } catch (error) {
+        console.warn("Failed to initialize TTS pipeline:", error);
+        this.enableTTS = false;
+      }
+    }
+  }
+
+  private async playAudio(audioData: Float32Array, sampleRate: number): Promise<void> {
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const audioBuffer = audioContext.createBuffer(1, audioData.length, sampleRate);
+      audioBuffer.copyToChannel(audioData, 0);
+      
+      const source = audioContext.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioContext.destination);
+      
+      return new Promise((resolve) => {
+        source.onended = () => {
+          audioContext.close();
+          resolve();
+        };
+        source.start();
+      });
+    } catch (error) {
+      console.warn("Failed to play audio:", error);
+    }
+  }
+
+  private async speakText(text: string): Promise<void> {
+    if (!this.enableTTS || !this.ttsPipeline || !text.trim()) {
+      return;
+    }
+
+    try {
+      const result = await this.ttsPipeline(text, { 
+        speaker_embeddings: this.speakerEmbeddings 
+      });
+      
+      if (result && result.audio && result.sampling_rate) {
+        await this.playAudio(result.audio, result.sampling_rate);
+      }
+    } catch (error) {
+      console.warn("Failed to synthesize speech:", error);
+    }
   }
 
   async generate(currentInput: string, abortSignal: AbortSignal, onUpdate: (content: string) => void): Promise<void> {
@@ -51,7 +113,7 @@ export class ResponseProcessor {
     this.abortSignal = abortSignal;
     this.currentOnUpdate = onUpdate;
     
-    // Reset state for new generation
+    // reset state for new generation
     this.state = {
       thoughtQueue: [],
       responseHistory: [],
@@ -94,6 +156,9 @@ export class ResponseProcessor {
         this.state.responseHistory.push(immediateResponse);
         this.state.processedContent = immediateResponse;
         onUpdate(this.state.processedContent);
+        
+        // tts
+        this.speakText(immediateResponse);
       }
     } catch (error) {
       console.error("Immediate response generation failed:", error);
@@ -149,6 +214,9 @@ export class ResponseProcessor {
         if (this.currentOnUpdate) {
           this.currentOnUpdate(this.state.processedContent);
         }
+        
+        // tts
+        this.speakText(response);
       }
     } catch (error) {
       console.error("Thought processing failed:", error);
@@ -194,6 +262,33 @@ export class ResponseProcessor {
     }
   }
     
+  async enableTTSMode(): Promise<void> {
+    if (this.enableTTS && this.ttsPipeline) {
+      return; // already enabled
+    }
+    
+    this.enableTTS = true;
+    
+    try {
+      if (!this.ttsPipeline) {
+        this.ttsPipeline = await pipeline('text-to-speech', 'Xenova/speecht5_tts', { dtype: 'fp32' });
+        console.log("TTS pipeline ready");
+      }
+    } catch (error) {
+      console.warn("Failed to initialize TTS pipeline:", error);
+      this.enableTTS = false;
+      throw error;
+    }
+  }
+  
+  disableTTSMode(): void {
+    this.enableTTS = false;
+  }
+  
+  isTTSEnabled(): boolean {
+    return this.enableTTS && !!this.ttsPipeline;
+  }
+
   getState(): ProcessorState {
     return this.state;
   }

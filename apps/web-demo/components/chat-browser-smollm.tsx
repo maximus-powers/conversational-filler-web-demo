@@ -2,7 +2,7 @@
 
 import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
-import { Bot, User, Loader2, Send } from "lucide-react";
+import { Bot, User, Loader2, Send, Volume2, VolumeX } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import { ResponseProcessor } from "../app/lib/response-processor";
 
@@ -19,6 +19,8 @@ export function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [modelLoading, setModelLoading] = useState(true);
   const [modelLoadingProgress, setModelLoadingProgress] = useState<string>("");
+  const [ttsEnabled, setTtsEnabled] = useState(false);
+  const [ttsLoading, setTtsLoading] = useState(false);
   const processorRef = useRef<ResponseProcessor | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -33,6 +35,9 @@ export function Chat() {
       console.log("Response processor ready");
       setModelLoading(false);
       setModelLoadingProgress("");
+      
+      // Check if TTS is available after initialization
+      setTtsEnabled(processorRef.current.isTTSEnabled());
     };
     initializeProcessor();
     return () => {
@@ -152,6 +157,25 @@ export function Chat() {
     setIsLoading(false);
   };
 
+  const toggleTTS = async () => {
+    if (!processorRef.current) return;
+    
+    if (ttsEnabled) {
+      processorRef.current.disableTTSMode();
+      setTtsEnabled(false);
+    } else {
+      setTtsLoading(true);
+      try {
+        await processorRef.current.enableTTSMode();
+        setTtsEnabled(true);
+      } catch (error) {
+        console.error("Failed to enable TTS:", error);
+      } finally {
+        setTtsLoading(false);
+      }
+    }
+  };
+
   return (
     <div className="flex flex-col h-[600px] w-full max-w-2xl mx-auto border rounded-lg bg-background">
       {/* Header */}
@@ -162,6 +186,21 @@ export function Chat() {
             <span className="font-semibold">Conversational Filler Demo</span>
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              onClick={toggleTTS}
+              variant="outline"
+              size="sm"
+              disabled={modelLoading || ttsLoading}
+              title={ttsEnabled ? "Disable Text-to-Speech" : "Enable Text-to-Speech"}
+            >
+              {ttsLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : ttsEnabled ? (
+                <Volume2 className="h-4 w-4" />
+              ) : (
+                <VolumeX className="h-4 w-4" />
+              )}
+            </Button>
             <ThemeToggle />
             <Button
               onClick={clearChat}
@@ -177,7 +216,9 @@ export function Chat() {
         <div className="text-xs text-muted-foreground">
           {modelLoading
             ? modelLoadingProgress || "Loading SmolLM..."
-            : "Fine-tuned SmolLM runs in browser • OpenAI provides thoughts"}
+            : ttsLoading
+            ? "Loading TTS model..."
+            : `Fine-tuned SmolLM runs in browser • OpenAI provides thoughts${ttsEnabled ? " • TTS enabled" : ""}`}
         </div>
       </div>
 
