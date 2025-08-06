@@ -61,7 +61,7 @@ export class ResponseProcessor {
       try {
         this.ttsPipeline = await pipeline(
           'text-to-speech', 
-          'onnx-community/OuteTTS-0.2-500M',
+          'Stoned-Code/piper-en_US-glados-medium',
           { 
             dtype: 'q8',
             device: 'webgpu' 
