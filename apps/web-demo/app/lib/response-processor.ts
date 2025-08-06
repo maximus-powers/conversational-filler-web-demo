@@ -24,7 +24,7 @@ export class ResponseProcessor {
   private speakerEmbeddings = 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin';
   private abortSignal: AbortSignal | null = null;
   private inferenceQueue: PQueue; // webgpu inference queue (resources can't be used by more than one TF pipeline at once)
-  private audioQueue: PQueue; // audip playback queue because it was playing multiple at a time
+  private audioQueue: PQueue; // audio playback queue because it was playing multiple at a time
   private currentOnUpdate: ((content: string) => void) | null = null;
   private onThoughtReceived?: (thought: string, index: number) => void;
   private state: ProcessorState;
@@ -76,7 +76,6 @@ export class ResponseProcessor {
   }
 
   private async playAudio(audioData: Float32Array, sampleRate: number): Promise<void> {
-    // Queue audio playback to prevent overlap
     return this.audioQueue.add(async () => {
       try {
         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
