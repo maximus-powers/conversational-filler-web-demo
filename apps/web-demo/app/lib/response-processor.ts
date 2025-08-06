@@ -1,5 +1,30 @@
 import { pipeline } from "@huggingface/transformers";
 
+// can't run models in parallel on webgpu, so queueing inferences
+class GPUInferenceQueue {
+  private tail: Promise<any>;
+  constructor() {
+    this.tail = Promise.resolve();
+  }
+  enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.tail.then(async () => {
+      try {
+        return await task();
+      } catch (error) {
+        if (error instanceof Error && 
+            (error.message.includes("Cannot read properties of null") ||
+             error.message.includes("device lost") ||
+             error.message.includes("context lost"))) {
+          console.warn("WebGPU session corruption detected, implementing recovery delay");
+        }
+        throw error; //rethrow
+      }
+    });
+    this.tail = next.catch(() => {}); // catch errors to not break queue
+    return next;
+  }
+}
+
 interface ProcessorConfig {
   onThoughtReceived?: (thought: string, index: number) => void;
   enableTTS?: boolean;
@@ -20,6 +45,7 @@ export class ResponseProcessor {
   private enableTTS: boolean;
   private speakerEmbeddings = 'https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/speaker_embeddings.bin';
   private abortSignal: AbortSignal | null = null;
+  private inferenceQueue: GPUInferenceQueue;
   private currentOnUpdate: ((content: string) => void) | null = null;
   private onThoughtReceived?: (thought: string, index: number) => void;
   private state: ProcessorState;
@@ -28,6 +54,7 @@ export class ResponseProcessor {
   constructor(config: ProcessorConfig) {
     this.onThoughtReceived = config.onThoughtReceived;
     this.enableTTS = config.enableTTS || false;
+    this.inferenceQueue = new GPUInferenceQueue();
     
     // init state
     this.state = {
@@ -54,7 +81,7 @@ export class ResponseProcessor {
       try {
         this.ttsPipeline = await pipeline(
           'text-to-speech', 
-          'Xenova/speecht5_tts',
+          'onnx-community/OuteTTS-0.2-500M',
           { 
             dtype: 'q8',
             device: 'webgpu' 
@@ -96,9 +123,12 @@ export class ResponseProcessor {
     }
 
     try {
-      const result = await this.ttsPipeline(text, { 
-        speaker_embeddings: this.speakerEmbeddings 
-      });
+      // queue tts synthesis to prevent webgpu conflicts
+      const result = await this.inferenceQueue.enqueue(() =>
+        this.ttsPipeline(text, { 
+          speaker_embeddings: this.speakerEmbeddings 
+        })
+      ) as any;
       
       if (result && result.audio && result.sampling_rate) {
         await this.playAudio(result.audio, result.sampling_rate);
@@ -126,17 +156,19 @@ export class ResponseProcessor {
     // first response doesn't wait for thoughts
     const immediatePrompt = `<|im_start|>user\n${currentInput}<|im_end|>\n<|im_start|>assistant\n`;
     try {
-      const immediateResult = await this.lmPipeline(immediatePrompt, {
-        max_new_tokens: 50,
-        temperature: 0.7,
-        do_sample: true,
-        return_full_text: false,
-        repetition_penalty: 1.2,
-        top_p: 0.9,
-        top_k: 50,
-        pad_token_id: 2,
-        eos_token_id: 2,
-      });
+      const immediateResult = await this.inferenceQueue.enqueue(() => 
+        this.lmPipeline(immediatePrompt, {
+          max_new_tokens: 50,
+          temperature: 0.7,
+          do_sample: true,
+          return_full_text: false,
+          repetition_penalty: 1.2,
+          top_p: 0.9,
+          top_k: 50,
+          pad_token_id: 2,
+          eos_token_id: 2,
+        })
+      ) as any;
 
       let immediateResponse = "";
       if (Array.isArray(immediateResult) && immediateResult[0]?.generated_text) {
@@ -184,17 +216,19 @@ export class ResponseProcessor {
 
     // run through local model
     try {
-      const result = await this.lmPipeline(contextPrompt, {
-        max_new_tokens: 50,
-        temperature: 0.7,
-        do_sample: true,
-        return_full_text: false,
-        repetition_penalty: 1.2,
-        top_p: 0.9,
-        top_k: 50,
-        pad_token_id: 2,
-        eos_token_id: 2,
-      });
+      const result = await this.inferenceQueue.enqueue(() =>
+        this.lmPipeline(contextPrompt, {
+          max_new_tokens: 50,
+          temperature: 0.7,
+          do_sample: true,
+          return_full_text: false,
+          repetition_penalty: 1.2,
+          top_p: 0.9,
+          top_k: 50,
+          pad_token_id: 2,
+          eos_token_id: 2,
+        })
+      ) as any;
       let response = "";
       if (Array.isArray(result) && result[0]?.generated_text) {
         response = result[0].generated_text;
@@ -271,7 +305,9 @@ export class ResponseProcessor {
     
     try {
       if (!this.ttsPipeline) {
-        this.ttsPipeline = await pipeline('text-to-speech', 'Xenova/speecht5_tts', { dtype: 'fp32' });
+        this.ttsPipeline = await this.inferenceQueue.enqueue(() =>
+          pipeline('text-to-speech', 'Xenova/speecht5_tts', { dtype: 'fp32' })
+        ) as any;
         console.log("TTS pipeline ready");
       }
     } catch (error) {
