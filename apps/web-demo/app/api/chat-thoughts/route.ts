@@ -5,10 +5,17 @@ export async function POST(req: Request) {
   try {
     const { messages } = await req.json();
 
+    // Format conversation for the system prompt
+    const conversationText = messages.map((msg: any) => 
+      `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
+    ).join('\n');
+
     const result = streamText({
       model: openai("gpt-4o"),
-      messages,
-      system: `Your job is to take the previous turns of the conversation and respond with distinct thoughts that could answer, separated by [bt], begin thought, and [et], end thought. The thoughts should be as short as possible while preserving meaning. Output only the spans of [bt] and [et].
+      messages: [
+        {
+          role: "system",
+          content: `Your job is to take the previous turns of the conversation and respond with distinct thoughts that could answer, separated by [bt], begin thought, and [et], end thought. The thoughts should be as short as possible while preserving meaning. Output only the spans of [bt] and [et].
 First think of a good response, then summarize it. Be concise. Be proactive sometimes. Stay on topic.
 
 Your distinct thoughts should be as if they were human thoughts, short, not full sentences but conveying the point of how you would continue an engaging conversation.
@@ -38,7 +45,13 @@ Your thoughts for responding: Oh very nice! Can I see photos of the cherry bloss
 Your response: [bt]Can I see photos?[et][bt]I haven't been yet.[et]Hope I don't miss.[et][done]
 
 Here is the conversation:
-{{ conversation }}`,
+${conversationText}`
+        },
+        {
+          role: "user", 
+          content: "Generate thoughts for this conversation."
+        }
+      ],
       temperature: 1,
     });
     return result.toTextStreamResponse();

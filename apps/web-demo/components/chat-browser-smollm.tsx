@@ -5,6 +5,7 @@ import { useState, useRef, useEffect } from "react";
 import { Bot, User, Loader2, Send, Volume2, VolumeX } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import { ResponseProcessor } from "../app/lib/response-processor";
+import { Timeline, TimelineEvent } from "./timeline";
 
 interface Message {
   id: string;
@@ -21,18 +22,56 @@ export function Chat() {
   const [modelLoadingProgress, setModelLoadingProgress] = useState<string>("");
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [ttsLoading, setTtsLoading] = useState(false);
+  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [conversationStartTime, setConversationStartTime] = useState<number | null>(null);
   const processorRef = useRef<ResponseProcessor | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Timeline event helpers
+  const addTimelineEvent = (
+    type: TimelineEvent["type"],
+    model: TimelineEvent["model"],
+    message: string,
+    content: string = ""
+  ) => {
+    const event: TimelineEvent = {
+      id: `${Date.now()}-${Math.random()}`,
+      timestamp: Date.now(),
+      type,
+      model,
+      message,
+      content: content.slice(0, 50) + (content.length > 50 ? "..." : ""),
+    };
+    setTimelineEvents(prev => [...prev, event]);
+  };
+
+  const clearTimeline = () => {
+    setTimelineEvents([]);
+    setConversationStartTime(null);
+  };
 
   // init response processor
   useEffect(() => {
     const initializeProcessor = async () => {
-      setModelLoadingProgress("Loading local model...");
+      const initStartTime = Date.now();
+      setConversationStartTime(initStartTime);
       
-      processorRef.current = new ResponseProcessor({});
+      setModelLoadingProgress("Loading local model...");
+      addTimelineEvent("model-loading", "SmolLM", "Starting model download", "");
+      
+      processorRef.current = new ResponseProcessor({
+        onThoughtReceived: (thought: string, index: number) => {
+          addTimelineEvent("openai-thought", "OpenAI", `Thought ${index + 1} Received`, thought);
+        },
+        onTTSCompleted: (text: string) => {
+          addTimelineEvent("tts-end", "TTS", "TTS Processing Completed", text);
+        }
+      });
       
       await processorRef.current.initialize();
       console.log("Response processor ready");
+      addTimelineEvent("model-ready", "SmolLM", "Model initialized and ready", "");
+      
       setModelLoading(false);
       setModelLoadingProgress("");
       
@@ -60,6 +99,10 @@ export function Chat() {
     const currentInput = input;
     setInput("");
     setIsLoading(true);
+
+    // Clear timeline and reset start time for each new message
+    setTimelineEvents([]);
+    setConversationStartTime(Date.now());
 
     // message placeholder (we update with stream)
     const assistantMessageId = (Date.now() + 1).toString();
@@ -90,6 +133,19 @@ export function Chat() {
                 : msg,
             ),
           );
+          
+          // Track SmolLM responses
+          const prevState = processorRef.current?.getState();
+          if (prevState) {
+            const currentResponse = prevState.responseHistory[prevState.responseHistory.length - 1];
+            if (currentResponse && !processedContent.includes("Sorry, I encountered an error.")) {
+              if (prevState.responseHistory.length === 1) {
+                addTimelineEvent("smollm-response", "SmolLM", "Initial Response Emitted", currentResponse);
+              } else {
+                addTimelineEvent("smollm-enhanced", "SmolLM", `Enhanced Response ${prevState.responseHistory.length}`, currentResponse);
+              }
+            }
+          }
         }
       );
 
@@ -150,6 +206,7 @@ export function Chat() {
 
   const clearChat = () => {
     setMessages([]);
+    clearTimeline();
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
@@ -165,11 +222,14 @@ export function Chat() {
       setTtsEnabled(false);
     } else {
       setTtsLoading(true);
+      addTimelineEvent("model-loading", "TTS", "Loading TTS model", "");
       try {
         await processorRef.current.enableTTSMode();
         setTtsEnabled(true);
+        addTimelineEvent("model-ready", "TTS", "TTS Model Ready", "");
       } catch (error) {
         console.error("Failed to enable TTS:", error);
+        addTimelineEvent("tts-end", "TTS", "TTS Failed to Load", "");
       } finally {
         setTtsLoading(false);
       }
@@ -177,7 +237,9 @@ export function Chat() {
   };
 
   return (
-    <div className="flex flex-col h-[600px] w-full max-w-2xl mx-auto border rounded-lg bg-background">
+    <>
+      <Timeline events={timelineEvents} startTime={conversationStartTime} />
+      <div className="flex flex-col h-[600px] w-full max-w-2xl mx-auto bg-background">
       {/* Header */}
       <div className="flex flex-col gap-2 p-4 border-b bg-muted/50">
         <div className="flex items-center justify-between">
@@ -302,5 +364,6 @@ export function Chat() {
         </form>
       </div>
     </div>
+    </>
   );
 }

@@ -5,6 +5,7 @@ import PQueue from 'p-queue';
 
 interface ProcessorConfig {
   onThoughtReceived?: (thought: string, index: number) => void;
+  onTTSCompleted?: (text: string) => void;
   enableTTS?: boolean;
 }
 
@@ -27,11 +28,13 @@ export class ResponseProcessor {
   private audioQueue: PQueue; // audio playback queue because it was playing multiple at a time
   private currentOnUpdate: ((content: string) => void) | null = null;
   private onThoughtReceived?: (thought: string, index: number) => void;
+  private onTTSCompleted?: (text: string) => void;
   private state: ProcessorState;
   private currentInput: string = "";
 
   constructor(config: ProcessorConfig) {
     this.onThoughtReceived = config.onThoughtReceived;
+    this.onTTSCompleted = config.onTTSCompleted;
     this.enableTTS = config.enableTTS || false;
     this.inferenceQueue = new PQueue({ concurrency: 1 });
     this.audioQueue = new PQueue({ concurrency: 1 });
@@ -54,7 +57,7 @@ export class ResponseProcessor {
       {
         dtype: "fp32",
         device: "webgpu",
-      },
+      }
     );
 
     if (this.enableTTS) {
@@ -111,6 +114,11 @@ export class ResponseProcessor {
           speaker_embeddings: this.speakerEmbeddings 
         })
       ) as any;
+      
+      // Notify TTS completion after synthesis but before playback
+      if (this.onTTSCompleted) {
+        this.onTTSCompleted(text);
+      }
       
       if (result && result.audio && result.sampling_rate) {
         await this.playAudio(result.audio, result.sampling_rate);
