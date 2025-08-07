@@ -141,7 +141,7 @@ export class ResponseProcessor {
       const immediateResult = await this.inferenceQueue.add(() => 
         this.lmPipeline(immediatePrompt, {
           max_new_tokens: 50,
-          temperature: 0.7,
+          temperature: 1,
           do_sample: true,
           return_full_text: false,
           repetition_penalty: 1.2,
@@ -201,7 +201,7 @@ export class ResponseProcessor {
       const result = await this.inferenceQueue.add(() =>
         this.lmPipeline(contextPrompt, {
           max_new_tokens: 50,
-          temperature: 0.7,
+          temperature: 1,
           do_sample: true,
           return_full_text: false,
           repetition_penalty: 1.2,

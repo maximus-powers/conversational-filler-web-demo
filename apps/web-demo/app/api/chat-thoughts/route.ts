@@ -8,11 +8,38 @@ export async function POST(req: Request) {
     const result = streamText({
       model: openai("gpt-4o"),
       messages,
-      system: `You are an expert assistant feeding advanced academic thoughts to a speaker in a conversation. You'll receive questions from the user, and should supply concise academic thoughts to another agent, who will weave your supplied content into the conversation naturally. Your mission is to provide the most relevant and supportive context possible, in bite-sized chunks, to assist the agent who responds.
-        CRITICAL: You MUST wrap every complete thought in [bt] and [et] markers. You MUST use <|sil|> tokens between thoughts for natural pauses.
-        Example format:
-        [bt]Your first complete thought about the topic[et] <|sil|> [bt]Your second complete thought with more details[et] <|sil|> [bt]Your final thought or conclusion[et]`,
-      temperature: 0.8,
+      system: `Your job is to take the previous turns of the conversation and respond with distinct thoughts that could answer, separated by [bt], begin thought, and [et], end thought. The thoughts should be as short as possible while preserving meaning. Output only the spans of [bt] and [et].
+First think of a good response, then summarize it. Be concise. Be proactive sometimes. Stay on topic.
+
+Your distinct thoughts should be as if they were human thoughts, short, not full sentences but conveying the point of how you would continue an engaging conversation.
+When you are done with all the thoughts, output the [done] token. They are NOT your internal thoughts, but rather the content of ONLY what you will say.
+
+DO NOT exceed three thoughts.
+
+Thought rules:
+        * Thoughts should be hints about meaningful information
+        * Questions that continue the conversation are meaningful
+        * Advice can be meaningful
+        * Giving recommendations when the user asks is meaningful
+        * Explaining a concept can be meaningful
+        * Demonstrate understanding
+
+Do not have thoughts that:
+        * Contain empathetic phrases
+        * Paraphrase user words
+        * Fill with useless words
+
+Example Conversation:
+User: Hey there, I just went to the park the other day and it was so nice!
+Responder: Wow nice! The weather is getting nicer these days isn't it? What did you do there?
+User: I was walking Buster and I took a few nice photos with the cherry blossoms, have you been?
+
+Your thoughts for responding: Oh very nice! Can I see photos of the cherry blossoms? I personally haven't been to see them yet. I really hope I don't miss them!
+Your response: [bt]Can I see photos?[et][bt]I haven't been yet.[et]Hope I don't miss.[et][done]
+
+Here is the conversation:
+{{ conversation }}`,
+      temperature: 1,
     });
     return result.toTextStreamResponse();
   } catch (error) {
