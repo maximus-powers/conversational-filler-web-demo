@@ -31,6 +31,9 @@ export class ResponseProcessor {
   private onTTSCompleted?: (text: string) => void;
   private state: ProcessorState;
   private currentInput: string = "";
+  private lastThoughtTime: number = 0;
+  private silenceDelay: number = 1000; // 1 second in milliseconds
+  private silenceTimer: NodeJS.Timeout | null = null;
 
   constructor(config: ProcessorConfig) {
     this.onThoughtReceived = config.onThoughtReceived;
@@ -143,6 +146,16 @@ export class ResponseProcessor {
       isProcessing: false
     };
     
+    // clear sil timer
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+    
+    // start sil timer
+    this.lastThoughtTime = Date.now();
+    this.resetSilenceTimer();
+    
     // first response doesn't wait for thoughts
     const immediatePrompt = `<|im_start|>user\n${currentInput}<|im_end|>\n<|im_start|>assistant\n`;
     try {
@@ -253,13 +266,32 @@ export class ResponseProcessor {
     }
   }
 
+  private generateSilenceToken(): void {
+    // Generate a <sil> token to fill gaps when no thoughts come through
+    const silenceThought = "<|sil|>";
+    this.state.thoughtQueue.push(silenceThought);
+    this.state.thoughtsToProcess.push(silenceThought);
+    this.processNextThought();
+  }
+
+  private resetSilenceTimer(): void {
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+    }
+    this.silenceTimer = setTimeout(() => {
+      this.generateSilenceToken();
+    }, this.silenceDelay);
+  }
+
   processThoughtChunk(chunk: string): void {
     this.state.thoughtBuffer += chunk;
+    this.lastThoughtTime = Date.now();
 
     // extract thoughts from buffer with [bt] and [et] markers
     let lastProcessedIndex = 0;
     const regex = /\[bt\](.*?)\[et\]/g;
     let match;
+    let foundThoughts = false;
 
     while ((match = regex.exec(this.state.thoughtBuffer)) !== null) {
       const thought = match[1].trim();
@@ -269,11 +301,24 @@ export class ResponseProcessor {
         if (this.onThoughtReceived) {
           this.onThoughtReceived(thought, this.state.thoughtQueue.length - 1);
         }
+        foundThoughts = true;
         // start processing if not already
         this.processNextThought();
         lastProcessedIndex = match.index + match[0].length;
       }
     }
+
+    // check for done token
+    if (this.state.thoughtBuffer.includes('[done]')) {
+      if (this.silenceTimer) {
+        clearTimeout(this.silenceTimer);
+        this.silenceTimer = null;
+      }
+    } else if (foundThoughts) {
+      // reset sil timer when thoughts found
+      this.resetSilenceTimer();
+    }
+
     // remove processed part of buffer
     if (lastProcessedIndex > 0) {
       this.state.thoughtBuffer = this.state.thoughtBuffer.substring(lastProcessedIndex);
