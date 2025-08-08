@@ -12,6 +12,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   processedContent?: string;
+  thoughts?: string[];
 }
 
 export function Chat() {
@@ -110,6 +111,7 @@ export function Chat() {
       role: "assistant",
       content: "",
       processedContent: "",
+      thoughts: [],
     };
     setMessages((prev) => [...prev, assistantMessage]);
 
@@ -176,8 +178,25 @@ export function Chat() {
         }
         const chunk = decoder.decode(value, { stream: true });
         processorRef.current!.processThoughtChunk(chunk);
+        
+        const currentState = processorRef.current!.getState();
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, thoughts: [...currentState.thoughtQueue] }
+              : msg,
+          ),
+        );
       }
       await processorRef.current!.waitForCompletion();
+      const finalState = processorRef.current!.getState();
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? { ...msg, thoughts: [...finalState.thoughtQueue] }
+            : msg,
+        ),
+      );
 
     } catch (error) {
       console.error("Chat error:", error);

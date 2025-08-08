@@ -4,11 +4,20 @@ import { openai } from "@ai-sdk/openai";
 export async function POST(req: Request) {
   try {
     const { messages } = await req.json();
-
-    // Format conversation for the system prompt
-    const conversationText = messages.map((msg: any) => 
-      `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
-    ).join('\n');
+    const conversationLines = [];
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        conversationLines.push(`User: ${msg.content}`);
+      } else if (msg.role === 'assistant') {
+        const responseText = msg.processedContent || msg.content;
+        if (responseText && responseText.trim()) {
+          const cleanedResponse = responseText.trim() + " ";
+          conversationLines.push(`Responder: ${cleanedResponse}`);
+        }
+      }
+    }
+    
+    const conversationText = conversationLines.join('\n');
 
     const result = streamText({
       model: openai("gpt-4o"),
