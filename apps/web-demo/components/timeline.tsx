@@ -1,7 +1,7 @@
 "use client";
 
-import React from "react";
-import { Bot, Brain, Volume2, Clock, Zap } from "lucide-react";
+import React, { useState } from "react";
+import { Bot, Brain, Volume2, Clock, Zap, Download, DownloadCloud, CheckCheckIcon, CheckCheck, CheckCircle, Maximize2, Minimize2 } from "lucide-react";
 
 export interface TimelineEvent {
   id: string;
@@ -10,14 +10,14 @@ export interface TimelineEvent {
   model: "SmolLM" | "OpenAI" | "TTS";
   message: string;
   content: string;
+  fullContent?: string;
 }
 
-interface TimelineProps {
+export function Timeline({ events, startTime }: {
   events: TimelineEvent[];
   startTime: number | null;
-}
-
-export function Timeline({ events, startTime }: TimelineProps) {
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
   const getRelativeTime = (timestamp: number) => {
     if (!startTime) return "0ms";
     return `${timestamp - startTime}ms`;
@@ -35,9 +35,9 @@ export function Timeline({ events, startTime }: TimelineProps) {
       case "tts-end":
         return <Volume2 className="h-3 w-3 text-orange-500" />;
       case "model-loading":
-        return <Clock className="h-3 w-3 text-yellow-500 animate-spin" />;
+        return <DownloadCloud className="h-3 w-3 text-yellow-500" />;
       case "model-ready":
-        return <Zap className="h-3 w-3 text-green-600" />;
+        return <CheckCircle className="h-3 w-3 text-green-600" />;
       default:
         return <Clock className="h-3 w-3 text-gray-500" />;
     }
@@ -65,12 +65,25 @@ export function Timeline({ events, startTime }: TimelineProps) {
 
   if (events.length === 0) {
     return (
-      <div className="w-64 border-r bg-background/50 flex flex-col h-[600px]">
+      <div className={`${isExpanded ? 'absolute inset-0 z-50 bg-background border shadow-lg' : 'w-64 border-r bg-background/50'} flex flex-col h-full`}>
         <div className="p-4 border-b">
-          <h3 className="text-sm font-semibold flex items-center gap-2">
-            <Clock className="h-4 w-4" />
-            Timeline
-          </h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <Clock className="h-4 w-4" />
+              Timeline
+            </h3>
+            <button
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="p-1 hover:bg-muted rounded"
+              title={isExpanded ? "Collapse timeline" : "Expand timeline"}
+            >
+              {isExpanded ? (
+                <Minimize2 className="h-3 w-3" />
+              ) : (
+                <Maximize2 className="h-3 w-3" />
+              )}
+            </button>
+          </div>
         </div>
         <div className="flex-1 flex items-center justify-center p-4">
           <div className="text-xs text-muted-foreground text-center">
@@ -82,52 +95,61 @@ export function Timeline({ events, startTime }: TimelineProps) {
   }
 
   return (
-    <div className="w-64 border-r bg-background/50 flex flex-col h-[600px]">
+    <div className={`${isExpanded ? 'absolute inset-0 z-50 bg-background border shadow-lg' : 'w-64 border-r bg-background/50'} flex flex-col h-full`}>
       <div className="p-4 border-b">
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          <Clock className="h-4 w-4" />
-          Timeline
-        </h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold flex items-center gap-2">
+            <Clock className="h-4 w-4" />
+            Timeline
+          </h3>
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="p-1 hover:bg-muted rounded"
+            title={isExpanded ? "Collapse timeline" : "Expand timeline"}
+          >
+            {isExpanded ? (
+              <Minimize2 className="h-3 w-3" />
+            ) : (
+              <Maximize2 className="h-3 w-3" />
+            )}
+          </button>
+        </div>
       </div>
       
       <div className="flex-1 overflow-y-auto p-4">
         <div className="relative">
-          {/* Vertical line */}
-          <div className="absolute left-4 top-0 bottom-0 w-px bg-border" />
+          <div className={`absolute left-4 top-0 bottom-0 w-px bg-border ${isExpanded ? 'hidden' : ''}`} />
           
-          {/* Events */}
-          <div className="space-y-3">
+          <div className={`${isExpanded ? 'space-y-6' : 'space-y-3'}`}>
           {events.map((event) => (
-            <div key={event.id} className="relative flex items-start gap-3">
-              {/* Icon circle */}
-              <div className="flex-shrink-0 w-8 h-8 rounded-full border-2 bg-background flex items-center justify-center relative z-10">
+            <div key={event.id} className={`relative flex items-start ${isExpanded ? 'gap-4' : 'gap-3'}`}>
+              <div className={`flex-shrink-0 ${isExpanded ? 'w-10 h-10' : 'w-8 h-8'} rounded-full border-2 bg-background flex items-center justify-center relative z-10`}>
                 {getEventIcon(event.type)}
               </div>
-              
-              {/* Event content */}
-              <div className={`flex-1 min-w-0 p-2 rounded border-l-2 ${getEventColor(event.type)}`}>
+              <div className={`flex-1 min-w-0 ${isExpanded ? 'p-4' : 'p-2'} rounded border-l-2 ${getEventColor(event.type)}`}>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-medium text-muted-foreground">
+                  <span className={`${isExpanded ? 'text-sm' : 'text-xs'} font-medium text-muted-foreground`}>
                     {getRelativeTime(event.timestamp)}
                   </span>
-                  <span className="text-xs font-mono text-muted-foreground">
+                  <span className={`${isExpanded ? 'text-sm' : 'text-xs'} font-mono text-muted-foreground`}>
                     {event.model}
                   </span>
                 </div>
                 
-                <div className="text-xs text-white-foreground">
+                <div className={`${isExpanded ? 'text-sm' : 'text-xs'} text-white-foreground`}>
                   {event.message}
                 </div>
                 
                 {event.content && (
-                  <div className="text-xs text-foreground mt-1 bg-background/50 rounded px-1 py-0.5 truncate">
-                    &ldquo;{event.content}&rdquo;
+                  <div className={`${isExpanded ? 'text-sm' : 'text-xs'} text-foreground mt-1 bg-background/50 rounded ${isExpanded ? 'px-3 py-2' : 'px-1 py-0.5'} ${isExpanded ? 'whitespace-pre-wrap' : 'truncate'}`}>
+                    &ldquo;{isExpanded && event.fullContent ? event.fullContent : event.content}&rdquo;
                   </div>
                 )}
               </div>
             </div>
           ))}
           </div>
+
         </div>
       </div>
     </div>

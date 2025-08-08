@@ -27,7 +27,6 @@ export function Chat() {
   const processorRef = useRef<ResponseProcessor | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Timeline event helpers
   const addTimelineEvent = (
     type: TimelineEvent["type"],
     model: TimelineEvent["model"],
@@ -41,6 +40,7 @@ export function Chat() {
       model,
       message,
       content: content.slice(0, 50) + (content.length > 50 ? "..." : ""),
+      fullContent: content,
     };
     setTimelineEvents(prev => [...prev, event]);
   };
@@ -75,7 +75,6 @@ export function Chat() {
       setModelLoading(false);
       setModelLoadingProgress("");
       
-      // Check if TTS is available after initialization
       setTtsEnabled(processorRef.current.isTTSEnabled());
     };
     initializeProcessor();
@@ -100,7 +99,7 @@ export function Chat() {
     setInput("");
     setIsLoading(true);
 
-    // Clear timeline and reset start time for each new message
+    // clear timeline and reset start time for each new message
     setTimelineEvents([]);
     setConversationStartTime(Date.now());
 
@@ -134,7 +133,6 @@ export function Chat() {
             ),
           );
           
-          // Track SmolLM responses
           const prevState = processorRef.current?.getState();
           if (prevState) {
             const currentResponse = prevState.responseHistory[prevState.responseHistory.length - 1];
@@ -237,9 +235,9 @@ export function Chat() {
   };
 
   return (
-    <>
+    <div className="flex relative w-full">
       <Timeline events={timelineEvents} startTime={conversationStartTime} />
-      <div className="flex flex-col h-[600px] w-full max-w-2xl mx-auto bg-background">
+      <div className="flex flex-col flex-1 bg-background">
       {/* Header */}
       <div className="flex flex-col gap-2 p-4 border-b bg-muted/50">
         <div className="flex items-center justify-between">
@@ -364,6 +362,6 @@ export function Chat() {
         </form>
       </div>
     </div>
-    </>
+    </div>
   );
 }
