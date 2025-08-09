@@ -74,7 +74,9 @@ export function Chat() {
         },
         onTTSCompleted: (text: string) => {
           addTimelineEvent("tts-end", "TTS", "TTS Processing Completed", text);
-        }
+        },
+        // Disable regular TTS by default - only use worker TTS in speech mode
+        enableTTS: false
       });
       
       await processorRef.current.initialize();
@@ -142,8 +144,8 @@ export function Chat() {
       }
     };
 
-    // Only initialize speech processor when explicitly requested
-    // initializeSpeechProcessor();
+    // Initialize speech processor by default for TTS support
+    initializeSpeechProcessor();
 
     return () => {
       if (speechProcessorRef.current) {
@@ -155,16 +157,9 @@ export function Chat() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || modelLoading || !processorRef.current)
+    if (!input.trim() || isLoading || modelLoading)
       return;
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: input,
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
     const currentInput = input;
     setInput("");
     setIsLoading(true);
@@ -173,120 +168,31 @@ export function Chat() {
     setTimelineEvents([]);
     setConversationStartTime(Date.now());
 
-    // message placeholder (we update with stream)
-    const assistantMessageId = (Date.now() + 1).toString();
-    const assistantMessage: Message = {
-      id: assistantMessageId,
-      role: "assistant",
-      content: "",
-      processedContent: "",
-      thoughts: [],
-    };
-    setMessages((prev) => [...prev, assistantMessage]);
-
-    // cancel prev req
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-    abortControllerRef.current = new AbortController();
-
     try {
-      // start gen
-      await processorRef.current!.generate(
-        currentInput, 
-        abortControllerRef.current.signal,
-        (processedContent) => {
-          setMessages((prev) =>
-            prev.map((msg) =>
-              msg.id === assistantMessageId
-                ? { ...msg, processedContent: processedContent }
-                : msg,
-            ),
-          );
-          
-          const prevState = processorRef.current?.getState();
-          if (prevState) {
-            const currentResponse = prevState.responseHistory[prevState.responseHistory.length - 1];
-            if (currentResponse && !processedContent.includes("Sorry, I encountered an error.")) {
-              if (prevState.responseHistory.length === 1) {
-                addTimelineEvent("smollm-response", "SmolLM", "Initial Response Emitted", currentResponse);
-              } else {
-                addTimelineEvent("smollm-enhanced", "SmolLM", `Enhanced Response ${prevState.responseHistory.length}`, currentResponse);
-              }
-            }
-          }
-        }
-      );
-
-      // call api for provider thoughts
-      const response = await fetch("/api/chat-thoughts", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: messages.concat(userMessage)
-        }),
-        signal: abortControllerRef.current.signal,
-      });
-      if (!response.ok) {
-        throw new Error(`API error, status: ${response.status}`);
+      // Use speech processor for text input (same models, better TTS)
+      if (speechProcessorRef.current) {
+        await speechProcessorRef.current.processText(currentInput);
+      } else {
+        console.error("Speech processor not available");
       }
-
-      const reader = response.body?.getReader(); // reads as stream to extract chunks before full generation finishes
-      if (!reader) {
-        throw new Error("No response body reader available");
-      }
-      const decoder = new TextDecoder();
-
-      // process by chunk
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        const chunk = decoder.decode(value, { stream: true });
-        processorRef.current!.processThoughtChunk(chunk);
-        
-        const currentState = processorRef.current!.getState();
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMessageId
-              ? { ...msg, thoughts: [...currentState.thoughtQueue] }
-              : msg,
-          ),
-        );
-      }
-      await processorRef.current!.waitForCompletion();
-      const finalState = processorRef.current!.getState();
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId
-            ? { ...msg, thoughts: [...finalState.thoughtQueue] }
-            : msg,
-        ),
-      );
-
     } catch (error) {
-      console.error("Chat error:", error);
-      if (error instanceof Error && error.name === "AbortError") {
-        return;
-      }
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === assistantMessageId
-            ? {
-                ...msg,
-                content: "Sorry, I encountered an error.",
-                processedContent: "Sorry, I encountered an error.",
-              }
-            : msg,
-        ),
-      );
-
+      console.error("Text processing error:", error);
+      
+      // Fallback: Add error message
+      const userMessage: Message = {
+        id: Date.now().toString(),
+        role: "user",
+        content: currentInput,
+      };
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: "Sorry, I encountered an error.",
+        processedContent: "Sorry, I encountered an error.",
+      };
+      setMessages((prev) => [...prev, userMessage, errorMessage]);
     } finally {
       setIsLoading(false);
-      abortControllerRef.current = null;
     }
   };
 
@@ -302,6 +208,12 @@ export function Chat() {
 
   const toggleTTS = async () => {
     if (!processorRef.current) return;
+    
+    // Prevent TTS conflicts when speech mode is active
+    if (speechEnabled) {
+      alert("Speech mode already provides TTS. Disable speech mode first to use regular TTS.");
+      return;
+    }
     
     if (ttsEnabled) {
       processorRef.current.disableTTSMode();
@@ -431,21 +343,7 @@ export function Chat() {
             <span className="font-semibold">Conversational Filler Demo</span>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              onClick={toggleTTS}
-              variant="outline"
-              size="sm"
-              disabled={modelLoading || ttsLoading}
-              title={ttsEnabled ? "Disable Text-to-Speech" : "Enable Text-to-Speech"}
-            >
-              {ttsLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : ttsEnabled ? (
-                <Volume2 className="h-4 w-4" />
-              ) : (
-                <VolumeX className="h-4 w-4" />
-              )}
-            </Button>
+{/* TTS is now handled by speech processor - button hidden */}
             <Button
               onClick={toggleSpeech}
               variant="outline"
@@ -491,7 +389,7 @@ export function Chat() {
             ? "Loading speech models (VAD, Whisper, TTS)..."
             : ttsLoading
             ? "Loading TTS model..."
-            : `Fine-tuned SmolLM runs in browser • OpenAI provides thoughts${ttsEnabled ? " • TTS enabled" : ""}${speechEnabled ? " • Speech ready" : ""}${isRecording ? " • Recording active" : ""}${isListening ? " • Listening..." : ""}`}
+            : `Fine-tuned SmolLM runs in browser • OpenAI provides thoughts • TTS enabled${speechEnabled ? " • Speech ready" : ""}${isRecording ? " • Recording active" : ""}${isListening ? " • Listening..." : ""}`}
         </div>
       </div>
 

@@ -6,6 +6,7 @@ export interface SpeechProcessorConfig {
   onTranscriptionReceived?: (text: string) => void;
   onImmediateResponse?: (response: string) => void;
   onEnhancedResponse?: (response: string) => void;
+  onTTSStarted?: (text: string) => void;
   onStatusChange?: (status: string, message: string) => void;
   onAudioOutput?: (audio: Float32Array) => void;
   enableTTS?: boolean;
@@ -39,15 +40,39 @@ export class SpeechProcessor {
 
   async initialize(): Promise<void> {
     try {
-      // Initialize web worker as module (needed for ES imports)
-      this.worker = new Worker('/workers/speech-worker.js', { type: 'module' });
+      // Use bundled worker
+      this.worker = new Worker('/speech-worker-bundled.js', { type: 'module' });
+      
+      // Create a promise that resolves when worker is ready
+      const workerReady = new Promise<void>((resolve) => {
+        const checkReady = () => {
+          if (this.state.isReady) {
+            resolve();
+          } else {
+            setTimeout(checkReady, 100);
+          }
+        };
+        checkReady();
+      });
+      
       this.setupWorkerListeners();
       
       // Initialize audio contexts
       await this.setupAudioContexts();
       
       // Send init message to trigger ready status (avoids race condition)
+      console.log('Sending init message to worker');
       this.worker.postMessage({ type: 'init' });
+      
+      // Wait for worker to be ready (with timeout)
+      await Promise.race([
+        workerReady,
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Worker initialization timeout')), 10000)
+        )
+      ]);
+      
+      console.log('SpeechProcessor initialization complete');
       
     } catch (error) {
       console.error('Failed to initialize SpeechProcessor:', error);
@@ -58,13 +83,22 @@ export class SpeechProcessor {
   private setupWorkerListeners(): void {
     if (!this.worker) return;
 
+    this.worker.onerror = (error) => {
+      console.error('Worker error event:', error);
+    };
+
     this.worker.onmessage = ({ data }) => {
+      console.log('Worker message received:', data.type, data);
       if (data.error) {
         console.error('Worker error:', data.error);
         return;
       }
 
       switch (data.type) {
+        case 'info':
+          console.log('Worker info:', data.message);
+          break;
+          
         case 'status':
           console.log('SpeechProcessor status:', data.status, data.message);
           if (data.status === 'ready') {
@@ -89,18 +123,36 @@ export class SpeechProcessor {
           
         case 'immediate_response':
           this.config.onImmediateResponse?.(data.response);
+          // Trigger TTS start event for timeline
+          this.config.onTTSStarted?.(data.response);
           break;
           
         case 'enhanced_response':
           this.config.onEnhancedResponse?.(data.response);
+          // Trigger TTS start event for timeline
+          this.config.onTTSStarted?.(data.response);
           break;
           
         case 'audio_output':
-          if (data.audio && this.config.enableTTS && !this.state.isPlaying) {
-            // Direct audio streaming like webgpu-demo for better performance
-            this.state.isPlaying = true;
-            this.playbackNode?.port.postMessage(data.audio);
-            this.config.onAudioOutput?.(data.audio);
+          if (data.audio && this.config.enableTTS) {
+            console.log('Received TTS audio, accessing audio.audio for Float32Array');
+            // WebGPU-demo pattern: access data.result.audio, but our worker sends data.audio.audio
+            const audioBuffer = data.audio.audio || data.audio;
+            console.log('Audio buffer type:', audioBuffer?.constructor?.name, 'length:', audioBuffer?.length);
+            
+            if (audioBuffer instanceof Float32Array) {
+              // Direct audio streaming like webgpu-demo
+              this.state.isPlaying = true;
+              this.playbackNode?.port.postMessage(audioBuffer);
+              this.config.onAudioOutput?.(audioBuffer);
+              
+              // Trigger TTS completion callback for timeline integration  
+              if (data.text) {
+                this.config.onTTSCompleted?.(data.text);
+              }
+            } else {
+              console.warn('Expected Float32Array but got:', audioBuffer?.constructor?.name);
+            }
           }
           break;
           
@@ -140,6 +192,7 @@ export class SpeechProcessor {
     }
 
     try {
+      console.log('Requesting microphone access...');
       // Get microphone stream
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -150,9 +203,11 @@ export class SpeechProcessor {
           sampleRate: INPUT_SAMPLE_RATE,
         },
       });
+      console.log('Microphone access granted, stream:', this.mediaStream);
 
       // Create audio source and VAD worklet
       const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+      console.log('Created media stream source');
       
       this.worklet = new AudioWorkletNode(this.audioContext, 'vad-processor', {
         numberOfInputs: 1,
@@ -161,12 +216,22 @@ export class SpeechProcessor {
         channelCountMode: 'explicit',
         channelInterpretation: 'discrete',
       });
+      console.log('Created VAD worklet node');
 
       source.connect(this.worklet);
+      console.log('Connected source to worklet');
+
+      // Ensure audio context is running
+      if (this.audioContext.state !== 'running') {
+        console.log('Audio context state:', this.audioContext.state, 'resuming...');
+        await this.audioContext.resume();
+        console.log('Audio context resumed, new state:', this.audioContext.state);
+      }
 
       // Forward audio data to worker
       this.worklet.port.onmessage = (event) => {
         const { buffer } = event.data;
+        console.log('VAD worklet received audio buffer, length:', buffer.length);
         this.worker?.postMessage({ type: 'audio', buffer });
       };
 
@@ -181,10 +246,11 @@ export class SpeechProcessor {
       this.playbackNode.port.onmessage = (event) => {
         if (event.data.type === 'playback_ended') {
           this.state.isPlaying = false;
-          this.config.onTTSCompleted?.('Audio playback completed');
+          this.config.onTTSCompleted?.('Audio playbook completed');
         }
       };
 
+      console.log('Sending start_recording message to worker');
       this.worker?.postMessage({ type: 'start_recording' });
 
     } catch (error) {
@@ -216,6 +282,20 @@ export class SpeechProcessor {
 
   setVoice(voiceId: string): void {
     this.worker?.postMessage({ type: 'set_voice', voice: voiceId });
+  }
+
+  // Process text input (for typed messages)
+  async processText(text: string, abortSignal?: AbortSignal): Promise<void> {
+    if (!this.state.isReady || !this.worker) {
+      throw new Error('SpeechProcessor not ready');
+    }
+    
+    console.log('Processing text input:', text);
+    this.worker.postMessage({ 
+      type: 'process_text', 
+      text: text.trim(),
+      enableTTS: this.config.enableTTS 
+    });
   }
 
   getState(): SpeechProcessorState {

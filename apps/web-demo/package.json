@@ -9,21 +9,22 @@
     "start": "next start",
     "lint": "next lint",
     "lint:fix": "next lint --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:worker": "node build-worker.js"
   },
   "dependencies": {
     "@ai-sdk/openai": "^2.0.2",
     "@convo-filler/ui": "workspace:*",
     "@huggingface/transformers": "^3.7.1",
     "ai": "^5.0.2",
+    "kokoro-js": "^1.2.1",
     "lucide-react": "^0.475.0",
     "next": "^15.2.3",
     "next-themes": "^0.4.4",
     "openai": "^5.11.0",
     "p-queue": "^8.1.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "kokoro-js": "^1.2.1"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@convo-filler/eslint-config": "workspace:^",
@@ -33,6 +34,7 @@
     "@types/react-dom": "^19",
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
+    "esbuild": "^0.25.8",
     "eslint": "^8",
     "eslint-config-next": "^15.2.3",
     "eslint-config-prettier": "^9",

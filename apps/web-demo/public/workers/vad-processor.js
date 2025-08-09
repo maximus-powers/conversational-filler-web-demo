@@ -3,9 +3,20 @@ let globalPointer = 0;
 let globalBuffer = new Float32Array(MIN_CHUNK_SIZE);
 
 class VADProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.debugCounter = 0;
+  }
+  
   process(inputs, outputs, parameters) {
     const buffer = inputs[0][0];
-    if (!buffer) return; // buffer is null when the stream ends
+    if (!buffer) return true; // buffer is null when the stream ends
+
+    // Debug logging every 100 buffers
+    this.debugCounter++;
+    if (this.debugCounter % 100 === 0) {
+      console.log('VAD processor received buffer, length:', buffer.length, 'counter:', this.debugCounter);
+    }
 
     if (buffer.length > MIN_CHUNK_SIZE) {
       // If the buffer is larger than the minimum chunk size, send the entire buffer

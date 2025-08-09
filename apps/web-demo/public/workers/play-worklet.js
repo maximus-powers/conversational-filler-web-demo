@@ -8,9 +8,11 @@ class BufferedAudioWorkletProcessor extends AudioWorkletProcessor {
     this.port.onmessage = (event) => {
       const data = event.data;
       if (data instanceof Float32Array) {
+        console.log('Playback worklet received audio buffer, length:', data.length);
         this.hadData = true;
         this.bufferQueue.push(data);
       } else if (data === "stop") {
+        console.log('Playback worklet received stop message');
         this.bufferQueue = [];
         this.currentChunkOffset = 0;
       }

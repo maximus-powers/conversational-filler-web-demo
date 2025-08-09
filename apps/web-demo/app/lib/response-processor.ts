@@ -38,7 +38,8 @@ export class ResponseProcessor {
   constructor(config: ProcessorConfig) {
     this.onThoughtReceived = config.onThoughtReceived;
     this.onTTSCompleted = config.onTTSCompleted;
-    this.enableTTS = config.enableTTS || false;
+    // TTS is now always disabled in ResponseProcessor - use SpeechProcessor instead
+    this.enableTTS = false;
     this.inferenceQueue = new PQueue({ concurrency: 1 });
     this.audioQueue = new PQueue({ concurrency: 1 });
     
@@ -332,24 +333,10 @@ export class ResponseProcessor {
   }
     
   async enableTTSMode(): Promise<void> {
-    if (this.enableTTS && this.ttsPipeline) {
-      return; // already enabled
-    }
-    
-    this.enableTTS = true;
-    
-    try {
-      if (!this.ttsPipeline) {
-        this.ttsPipeline = await this.inferenceQueue.add(() =>
-          pipeline('text-to-speech', 'Xenova/speecht5_tts', { dtype: 'fp32' })
-        ) as any;
-        console.log("TTS pipeline ready");
-      }
-    } catch (error) {
-      console.warn("Failed to initialize TTS pipeline:", error);
-      this.enableTTS = false;
-      throw error;
-    }
+    // TTS is now handled by the SpeechProcessor only
+    // This method is kept for compatibility but doesn't actually enable TTS
+    console.log("TTS is now handled by SpeechProcessor - use speech mode instead");
+    this.enableTTS = false;
   }
   
   disableTTSMode(): void {

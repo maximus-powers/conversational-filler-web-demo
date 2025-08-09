@@ -1,3 +1,9 @@
+try {
+  self.postMessage({ type: "info", message: "Worker loading imports..." });
+} catch (e) {
+  // Even posting messages might fail
+}
+
 import {
   // VAD
   AutoModel,
@@ -23,12 +29,17 @@ const NEW_BUFFER_SIZE = 512;
 const MAX_NUM_PREV_BUFFERS = Math.ceil(SPEECH_PAD_SAMPLES / NEW_BUFFER_SIZE);
 
 const device = "webgpu";
-self.postMessage({ type: "info", message: `Using device: "${device}"` });
-self.postMessage({
-  type: "info",
-  message: "Loading models...",
-  duration: "until_next",
-});
+
+try {
+  self.postMessage({ type: "info", message: `Using device: "${device}"` });
+  self.postMessage({
+    type: "info",
+    message: "Loading models...",
+    duration: "until_next",
+  });
+} catch (e) {
+  console.error("Failed to send initial messages:", e);
+}
 
 // Load models
 const silero_vad = await AutoModel.from_pretrained(
@@ -376,13 +387,16 @@ function greet(text) {
 // Message handler
 self.onmessage = async (event) => {
   const { type, buffer } = event.data;
+  console.log('Worker received message:', type);
 
   if (type === "audio" && isPlaying) return;
 
   switch (type) {
     case "init":
+      console.log('Init message received, isInitialized:', isInitialized);
       if (!isInitialized) {
         isInitialized = true;
+        console.log('Sending ready status with voices:', Object.keys(tts.voices || {}));
         self.postMessage({
           type: "status",
           status: "ready",
