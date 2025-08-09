@@ -1,13 +1,13 @@
 "use client";
 
 import React, { useState } from "react";
-import { Bot, Brain, Volume2, Clock, Zap, Download, DownloadCloud, CheckCheckIcon, CheckCheck, CheckCircle, Maximize2, Minimize2 } from "lucide-react";
+import { Bot, Brain, Volume2, Clock, DownloadCloud, CheckCircle, Maximize2, Minimize2, Mic, MicOff } from "lucide-react";
 
 export interface TimelineEvent {
   id: string;
   timestamp: number;
-  type: "smollm-response" | "openai-thought" | "smollm-enhanced" | "tts-start" | "tts-end" | "model-loading" | "model-ready";
-  model: "SmolLM" | "OpenAI" | "TTS";
+  type: "smollm-response" | "openai-thought" | "smollm-enhanced" | "tts-start" | "tts-end" | "model-loading" | "model-ready" | "whisper-transcription" | "recording-start" | "recording-end";
+  model: "SmolLM" | "OpenAI" | "TTS" | "Speech" | "Whisper" | "VAD";
   message: string;
   content: string;
   fullContent?: string;
@@ -38,6 +38,12 @@ export function Timeline({ events, startTime }: {
         return <DownloadCloud className="h-3 w-3 text-yellow-500" />;
       case "model-ready":
         return <CheckCircle className="h-3 w-3 text-green-600" />;
+      case "whisper-transcription":
+        return <Brain className="h-3 w-3 text-purple-500" />;
+      case "recording-start":
+        return <Mic className="h-3 w-3 text-red-500" />;
+      case "recording-end":
+        return <MicOff className="h-3 w-3 text-gray-500" />;
       default:
         return <Clock className="h-3 w-3 text-gray-500" />;
     }
@@ -58,6 +64,12 @@ export function Timeline({ events, startTime }: {
         return "border-yellow-500 bg-yellow-50 dark:bg-yellow-950";
       case "model-ready":
         return "border-green-600 bg-green-50 dark:bg-green-950";
+      case "whisper-transcription":
+        return "border-purple-500 bg-purple-50 dark:bg-purple-950";
+      case "recording-start":
+        return "border-red-500 bg-red-50 dark:bg-red-950";
+      case "recording-end":
+        return "border-gray-500 bg-gray-50 dark:bg-gray-950";
       default:
         return "border-gray-500 bg-gray-50 dark:bg-gray-950";
     }

@@ -69,7 +69,7 @@ export class ResponseProcessor {
           'text-to-speech', 
           'Stoned-Code/piper-en_US-glados-medium',
           { 
-            dtype: 'q8',
+            dtype: 'q4',
             device: 'webgpu' 
           }
         );
@@ -163,7 +163,7 @@ export class ResponseProcessor {
         this.lmPipeline(immediatePrompt, {
           max_new_tokens: 50,
           temperature: 1,
-          do_sample: true,
+          do_sample: false,
           return_full_text: false,
           repetition_penalty: 1.2,
           top_p: 0.9,
@@ -223,7 +223,7 @@ export class ResponseProcessor {
         this.lmPipeline(contextPrompt, {
           max_new_tokens: 50,
           temperature: 1,
-          do_sample: true,
+          do_sample: false,
           return_full_text: false,
           repetition_penalty: 1.2,
           top_p: 0.9,

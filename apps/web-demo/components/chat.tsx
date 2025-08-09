@@ -2,9 +2,10 @@
 
 import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
-import { Bot, User, Loader2, Send, Volume2, VolumeX } from "lucide-react";
+import { Bot, User, Loader2, Send, Volume2, VolumeX, Mic, MicOff } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import { ResponseProcessor } from "../app/lib/response-processor";
+import { SpeechProcessor } from "../app/lib/speech-processor";
 import { Timeline, TimelineEvent } from "./timeline";
 
 interface Message {
@@ -25,7 +26,14 @@ export function Chat() {
   const [ttsLoading, setTtsLoading] = useState(false);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
   const [conversationStartTime, setConversationStartTime] = useState<number | null>(null);
+  const [speechEnabled, setSpeechEnabled] = useState(false);
+  const [speechLoading, setSpeechLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [selectedVoice, setSelectedVoice] = useState<string>("af_heart");
+  const [availableVoices, setAvailableVoices] = useState<Record<string, any>>({});
   const processorRef = useRef<ResponseProcessor | null>(null);
+  const speechProcessorRef = useRef<SpeechProcessor | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const addTimelineEvent = (
@@ -81,6 +89,67 @@ export function Chat() {
     initializeProcessor();
     return () => {
       processorRef.current = null;
+    };
+  }, []);
+
+  // init speech processor
+  useEffect(() => {
+    const initializeSpeechProcessor = async () => {
+      setSpeechLoading(true);
+      addTimelineEvent("model-loading", "Speech", "Loading speech models", "");
+      
+      speechProcessorRef.current = new SpeechProcessor({
+        onThoughtReceived: (thought: string, index: number) => {
+          addTimelineEvent("openai-thought", "OpenAI", `Speech Thought ${index + 1}`, thought);
+        },
+        onTranscriptionReceived: (text: string) => {
+          addTimelineEvent("whisper-transcription", "Whisper", "Speech Transcribed", text);
+        },
+        onImmediateResponse: (response: string) => {
+          addTimelineEvent("smollm-response", "SmolLM", "Immediate Speech Response", response);
+        },
+        onEnhancedResponse: (response: string) => {
+          addTimelineEvent("smollm-enhanced", "SmolLM", "Enhanced Speech Response", response);
+        },
+        onStatusChange: (status: string, message: string) => {
+          if (status === 'ready') {
+            const voices = speechProcessorRef.current?.getVoices() || {};
+            setAvailableVoices(voices);
+            addTimelineEvent("model-ready", "Speech", "Speech models ready", "");
+          } else if (status === 'recording_start') {
+            setIsListening(true);
+            addTimelineEvent("recording-start", "VAD", "Voice detected", "");
+          } else if (status === 'recording_end') {
+            setIsListening(false);
+            addTimelineEvent("recording-end", "VAD", "Processing speech", "");
+          }
+        },
+        onTTSCompleted: (text: string) => {
+          addTimelineEvent("tts-end", "TTS", "Speech TTS Completed", text);
+        },
+        enableTTS: true,
+      });
+
+      try {
+        await speechProcessorRef.current.initialize();
+        setSpeechEnabled(true);
+        setSpeechLoading(false);
+        console.log("Speech processor ready");
+      } catch (error) {
+        console.error("Failed to initialize speech processor:", error);
+        setSpeechLoading(false);
+        addTimelineEvent("tts-end", "Speech", "Speech initialization failed", "");
+      }
+    };
+
+    // Only initialize speech processor when explicitly requested
+    // initializeSpeechProcessor();
+
+    return () => {
+      if (speechProcessorRef.current) {
+        speechProcessorRef.current.dispose();
+        speechProcessorRef.current = null;
+      }
     };
   }, []);
 
@@ -253,6 +322,103 @@ export function Chat() {
     }
   };
 
+  const toggleSpeech = async () => {
+    if (!speechEnabled && !speechProcessorRef.current) {
+      // Initialize speech processor
+      setSpeechLoading(true);
+      addTimelineEvent("model-loading", "Speech", "Loading speech models", "");
+      
+      speechProcessorRef.current = new SpeechProcessor({
+        onThoughtReceived: (thought: string, index: number) => {
+          addTimelineEvent("openai-thought", "OpenAI", `Speech Thought ${index + 1}`, thought);
+        },
+        onTranscriptionReceived: (text: string) => {
+          addTimelineEvent("whisper-transcription", "Whisper", "Speech Transcribed", text);
+          // Add transcribed text as a user message
+          const userMessage: Message = {
+            id: Date.now().toString(),
+            role: "user",
+            content: text,
+          };
+          setMessages((prev) => [...prev, userMessage]);
+        },
+        onImmediateResponse: (response: string) => {
+          addTimelineEvent("smollm-response", "SmolLM", "Immediate Speech Response", response);
+          // Add immediate response as assistant message
+          const assistantMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: response,
+            processedContent: response,
+          };
+          setMessages((prev) => [...prev, assistantMessage]);
+        },
+        onEnhancedResponse: (response: string) => {
+          addTimelineEvent("smollm-enhanced", "SmolLM", "Enhanced Speech Response", response);
+          // Update the last assistant message with enhanced content
+          setMessages((prev) => {
+            const newMessages = [...prev];
+            for (let i = newMessages.length - 1; i >= 0; i--) {
+              if (newMessages[i].role === "assistant") {
+                newMessages[i] = {
+                  ...newMessages[i],
+                  processedContent: (newMessages[i].processedContent || newMessages[i].content) + " " + response
+                };
+                break;
+              }
+            }
+            return newMessages;
+          });
+        },
+        onStatusChange: (status: string, message: string) => {
+          if (status === 'ready') {
+            const voices = speechProcessorRef.current?.getVoices() || {};
+            setAvailableVoices(voices);
+            addTimelineEvent("model-ready", "Speech", "Speech models ready", "");
+          } else if (status === 'recording_start') {
+            setIsListening(true);
+            addTimelineEvent("recording-start", "VAD", "Voice detected", "");
+          } else if (status === 'recording_end') {
+            setIsListening(false);
+            addTimelineEvent("recording-end", "VAD", "Processing speech", "");
+          }
+        },
+        onTTSCompleted: (text: string) => {
+          addTimelineEvent("tts-end", "TTS", "Speech TTS Completed", text);
+        },
+        enableTTS: true,
+      });
+
+      try {
+        await speechProcessorRef.current.initialize();
+        setSpeechEnabled(true);
+        setSpeechLoading(false);
+        console.log("Speech processor ready");
+      } catch (error) {
+        console.error("Failed to initialize speech processor:", error);
+        addTimelineEvent("tts-end", "Speech", "Speech initialization failed", "");
+        setSpeechLoading(false);
+      }
+    } else if (speechEnabled && speechProcessorRef.current && !isRecording) {
+      // Start recording
+      try {
+        await speechProcessorRef.current.startRecording();
+        setIsRecording(true);
+      } catch (error) {
+        console.error("Failed to start recording:", error);
+      }
+    } else if (speechEnabled && speechProcessorRef.current && isRecording) {
+      // Stop recording
+      try {
+        await speechProcessorRef.current.stopRecording();
+        setIsRecording(false);
+        setIsListening(false);
+      } catch (error) {
+        console.error("Failed to stop recording:", error);
+      }
+    }
+  };
+
   return (
     <div className="flex relative w-full">
       <Timeline events={timelineEvents} startTime={conversationStartTime} />
@@ -280,6 +446,32 @@ export function Chat() {
                 <VolumeX className="h-4 w-4" />
               )}
             </Button>
+            <Button
+              onClick={toggleSpeech}
+              variant="outline"
+              size="sm"
+              disabled={modelLoading || speechLoading}
+              title={
+                speechLoading 
+                  ? "Loading speech models..." 
+                  : !speechEnabled 
+                  ? "Enable Speech Mode" 
+                  : isRecording 
+                  ? "Stop Recording" 
+                  : "Start Recording"
+              }
+              className={isListening ? "bg-red-100 border-red-300" : ""}
+            >
+              {speechLoading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : !speechEnabled ? (
+                <MicOff className="h-4 w-4" />
+              ) : isRecording ? (
+                <Mic className={`h-4 w-4 ${isListening ? "text-red-500" : "text-green-500"}`} />
+              ) : (
+                <Mic className="h-4 w-4 text-gray-500" />
+              )}
+            </Button>
             <ThemeToggle />
             <Button
               onClick={clearChat}
@@ -295,9 +487,11 @@ export function Chat() {
         <div className="text-xs text-muted-foreground">
           {modelLoading
             ? modelLoadingProgress || "Loading SmolLM..."
+            : speechLoading
+            ? "Loading speech models (VAD, Whisper, TTS)..."
             : ttsLoading
             ? "Loading TTS model..."
-            : `Fine-tuned SmolLM runs in browser • OpenAI provides thoughts${ttsEnabled ? " • TTS enabled" : ""}`}
+            : `Fine-tuned SmolLM runs in browser • OpenAI provides thoughts${ttsEnabled ? " • TTS enabled" : ""}${speechEnabled ? " • Speech ready" : ""}${isRecording ? " • Recording active" : ""}${isListening ? " • Listening..." : ""}`}
         </div>
       </div>
 
@@ -308,7 +502,8 @@ export function Chat() {
             <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p className="text-lg font-medium mb-2">Start a conversation</p>
             <p className="text-sm">
-              Browser-based SmolLM processes OpenAI thoughts locally.
+              Browser-based SmolLM processes OpenAI thoughts locally.<br/>
+              Enable speech mode for voice conversations with VAD, Whisper ASR & TTS.
             </p>
             {modelLoading && (
               <div className="mt-4">
