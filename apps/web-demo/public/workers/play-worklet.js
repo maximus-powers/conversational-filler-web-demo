@@ -68,6 +68,6 @@ class BufferedAudioWorkletProcessor extends AudioWorkletProcessor {
 }
 
 registerProcessor(
-  "buffered-audio-worklet-processor",
+  "play-worklet",
   BufferedAudioWorkletProcessor,
 );

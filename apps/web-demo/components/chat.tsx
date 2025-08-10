@@ -2,11 +2,11 @@
 
 import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
-import { Bot, User, Loader2, Send, Volume2, VolumeX, Mic, MicOff } from "lucide-react";
+import { Bot, User, Loader2, Send, Mic, MicOff, MessageSquare } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
-import { ResponseProcessor } from "../app/lib/response-processor";
-import { SpeechProcessor } from "../app/lib/speech-processor";
+import { UnifiedPipeline, AppMode } from "../app/lib/unified-pipeline";
 import { Timeline, TimelineEvent } from "./timeline";
+import { ModeSwitcher } from "./mode-switcher";
 
 interface Message {
   id: string;
@@ -22,19 +22,23 @@ export function Chat() {
   const [isLoading, setIsLoading] = useState(false);
   const [modelLoading, setModelLoading] = useState(true);
   const [modelLoadingProgress, setModelLoadingProgress] = useState<string>("");
-  const [ttsEnabled, setTtsEnabled] = useState(false);
-  const [ttsLoading, setTtsLoading] = useState(false);
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
   const [conversationStartTime, setConversationStartTime] = useState<number | null>(null);
-  const [speechEnabled, setSpeechEnabled] = useState(false);
-  const [speechLoading, setSpeechLoading] = useState(false);
+  const [mode, setMode] = useState<AppMode>("text");
   const [isListening, setIsListening] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState<string>("af_heart");
   const [availableVoices, setAvailableVoices] = useState<Record<string, any>>({});
-  const processorRef = useRef<ResponseProcessor | null>(null);
-  const speechProcessorRef = useRef<SpeechProcessor | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const pipelineRef = useRef<UnifiedPipeline | null>(null);
+  const messagesRef = useRef<Map<string, Message>>(new Map());
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   const addTimelineEvent = (
     type: TimelineEvent["type"],
@@ -59,421 +63,325 @@ export function Chat() {
     setConversationStartTime(null);
   };
 
-  // init response processor
+  // Initialize pipeline
   useEffect(() => {
-    const initializeProcessor = async () => {
+    const initializePipeline = async () => {
       const initStartTime = Date.now();
       setConversationStartTime(initStartTime);
       
-      setModelLoadingProgress("Loading local model...");
-      addTimelineEvent("model-loading", "SmolLM", "Starting model download", "");
+      setModelLoadingProgress("Loading models...");
+      addTimelineEvent("model-loading", "Pipeline", "Initializing unified pipeline", "");
       
-      processorRef.current = new ResponseProcessor({
-        onThoughtReceived: (thought: string, index: number) => {
-          addTimelineEvent("openai-thought", "OpenAI", `Thought ${index + 1} Received`, thought);
+      pipelineRef.current = new UnifiedPipeline({
+        onMessageReceived: (role, content, messageId) => {
+          const message: Message = {
+            id: messageId || Date.now().toString(),
+            role,
+            content,
+            processedContent: content,
+          };
+          
+          if (messageId) {
+            messagesRef.current.set(messageId, message);
+          }
+          
+          setMessages(prev => {
+            const existing = prev.find(m => m.id === message.id);
+            if (existing) {
+              return prev.map(m => m.id === message.id ? message : m);
+            }
+            return [...prev, message];
+          });
         },
-        onTTSCompleted: (text: string) => {
-          addTimelineEvent("tts-end", "TTS", "TTS Processing Completed", text);
+        
+        onMessageUpdated: (messageId, newContent) => {
+          setMessages(prev => prev.map(msg => {
+            if (msg.id === messageId) {
+              const currentContent = msg.processedContent || msg.content;
+              return {
+                ...msg,
+                processedContent: currentContent + " " + newContent
+              };
+            }
+            return msg;
+          }));
         },
-        // Disable regular TTS by default - only use worker TTS in speech mode
-        enableTTS: false
-      });
-      
-      await processorRef.current.initialize();
-      console.log("Response processor ready");
-      addTimelineEvent("model-ready", "SmolLM", "Model initialized and ready", "");
-      
-      setModelLoading(false);
-      setModelLoadingProgress("");
-      
-      setTtsEnabled(processorRef.current.isTTSEnabled());
-    };
-    initializeProcessor();
-    return () => {
-      processorRef.current = null;
-    };
-  }, []);
-
-  // init speech processor
-  useEffect(() => {
-    const initializeSpeechProcessor = async () => {
-      setSpeechLoading(true);
-      addTimelineEvent("model-loading", "Speech", "Loading speech models", "");
-      
-      speechProcessorRef.current = new SpeechProcessor({
-        onThoughtReceived: (thought: string, index: number) => {
-          addTimelineEvent("openai-thought", "OpenAI", `Speech Thought ${index + 1}`, thought);
+        
+        onThoughtReceived: (thought, index) => {
+          addTimelineEvent("openai-thought", "OpenAI", `Thought ${index + 1}`, thought);
         },
-        onTranscriptionReceived: (text: string) => {
-          addTimelineEvent("whisper-transcription", "Whisper", "Speech Transcribed", text);
+        
+        onTranscriptionReceived: (text) => {
+          addTimelineEvent("whisper-transcription", "Whisper", "Transcribed speech", text);
         },
-        onImmediateResponse: (response: string) => {
-          addTimelineEvent("smollm-response", "SmolLM", "Immediate Speech Response", response);
-        },
-        onEnhancedResponse: (response: string) => {
-          addTimelineEvent("smollm-enhanced", "SmolLM", "Enhanced Speech Response", response);
-        },
-        onStatusChange: (status: string, message: string) => {
+        
+        onStatusChange: (status, message) => {
+          setModelLoadingProgress(message);
           if (status === 'ready') {
-            const voices = speechProcessorRef.current?.getVoices() || {};
-            setAvailableVoices(voices);
-            addTimelineEvent("model-ready", "Speech", "Speech models ready", "");
+            setModelLoading(false);
+            setModelLoadingProgress("");
           } else if (status === 'recording_start') {
             setIsListening(true);
-            addTimelineEvent("recording-start", "VAD", "Voice detected", "");
           } else if (status === 'recording_end') {
             setIsListening(false);
-            addTimelineEvent("recording-end", "VAD", "Processing speech", "");
           }
         },
-        onTTSCompleted: (text: string) => {
-          addTimelineEvent("tts-end", "TTS", "Speech TTS Completed", text);
+        
+        onTimelineEvent: (type, model, message, content) => {
+          addTimelineEvent(type as TimelineEvent["type"], model as TimelineEvent["model"], message, content || "");
         },
-        enableTTS: true,
       });
 
       try {
-        await speechProcessorRef.current.initialize();
-        setSpeechEnabled(true);
-        setSpeechLoading(false);
-        console.log("Speech processor ready");
+        await pipelineRef.current.initialize(mode);
+        const voices = pipelineRef.current.getVoices();
+        setAvailableVoices(voices);
+        
+        const initEndTime = Date.now();
+        const loadTime = ((initEndTime - initStartTime) / 1000).toFixed(2);
+        addTimelineEvent("model-ready", "Pipeline", `Models loaded in ${loadTime}s`, "");
       } catch (error) {
-        console.error("Failed to initialize speech processor:", error);
-        setSpeechLoading(false);
-        addTimelineEvent("tts-end", "Speech", "Speech initialization failed", "");
+        console.error("Failed to initialize pipeline:", error);
+        setModelLoadingProgress("Failed to load models");
+        addTimelineEvent("error", "Pipeline", "Failed to initialize", error?.toString() || "");
       }
     };
 
-    // Initialize speech processor by default for TTS support
-    initializeSpeechProcessor();
+    initializePipeline();
 
     return () => {
-      if (speechProcessorRef.current) {
-        speechProcessorRef.current.dispose();
-        speechProcessorRef.current = null;
+      if (pipelineRef.current) {
+        pipelineRef.current.dispose();
       }
     };
   }, []);
 
+  const handleModeChange = async (newMode: AppMode) => {
+    if (!pipelineRef.current || newMode === mode) return;
+    
+    setModelLoading(true);
+    setModelLoadingProgress(`Switching to ${newMode} mode...`);
+    
+    try {
+      await pipelineRef.current.switchMode(newMode);
+      setMode(newMode);
+      const voices = pipelineRef.current.getVoices();
+      setAvailableVoices(voices);
+      addTimelineEvent("mode-switch", "System", `Switched to ${newMode} mode`, "");
+    } catch (error) {
+      console.error("Failed to switch mode:", error);
+      addTimelineEvent("error", "System", "Failed to switch mode", error?.toString() || "");
+    } finally {
+      setModelLoading(false);
+      setModelLoadingProgress("");
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || modelLoading)
-      return;
-
+    if (!input.trim() || isLoading || modelLoading || !pipelineRef.current) return;
+    
     const currentInput = input;
     setInput("");
     setIsLoading(true);
-
-    // clear timeline and reset start time for each new message
-    setTimelineEvents([]);
-    setConversationStartTime(Date.now());
-
+    
+    // Clear timeline for new conversation
+    if (messages.length === 0) {
+      setTimelineEvents([]);
+      setConversationStartTime(Date.now());
+    }
+    
     try {
-      // Use speech processor for text input (same models, better TTS)
-      if (speechProcessorRef.current) {
-        await speechProcessorRef.current.processText(currentInput);
-      } else {
-        console.error("Speech processor not available");
-      }
+      await pipelineRef.current.processText(currentInput);
     } catch (error) {
       console.error("Text processing error:", error);
-      
-      // Fallback: Add error message
-      const userMessage: Message = {
-        id: Date.now().toString(),
-        role: "user",
-        content: currentInput,
-      };
-      const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: "Sorry, I encountered an error.",
-        processedContent: "Sorry, I encountered an error.",
-      };
-      setMessages((prev) => [...prev, userMessage, errorMessage]);
+      addTimelineEvent("error", "System", "Processing failed", error?.toString() || "");
     } finally {
       setIsLoading(false);
     }
   };
 
+
   const clearChat = () => {
     setMessages([]);
+    messagesRef.current.clear();
     clearTimeline();
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
-    }
     setIsLoading(false);
   };
 
-  const toggleTTS = async () => {
-    if (!processorRef.current) return;
-    
-    // Prevent TTS conflicts when speech mode is active
-    if (speechEnabled) {
-      alert("Speech mode already provides TTS. Disable speech mode first to use regular TTS.");
-      return;
+  useEffect(() => {
+    if (selectedVoice && pipelineRef.current) {
+      pipelineRef.current.setVoice(selectedVoice);
     }
-    
-    if (ttsEnabled) {
-      processorRef.current.disableTTSMode();
-      setTtsEnabled(false);
-    } else {
-      setTtsLoading(true);
-      addTimelineEvent("model-loading", "TTS", "Loading TTS model", "");
-      try {
-        await processorRef.current.enableTTSMode();
-        setTtsEnabled(true);
-        addTimelineEvent("model-ready", "TTS", "TTS Model Ready", "");
-      } catch (error) {
-        console.error("Failed to enable TTS:", error);
-        addTimelineEvent("tts-end", "TTS", "TTS Failed to Load", "");
-      } finally {
-        setTtsLoading(false);
-      }
-    }
-  };
-
-  const toggleSpeech = async () => {
-    if (!speechEnabled && !speechProcessorRef.current) {
-      // Initialize speech processor
-      setSpeechLoading(true);
-      addTimelineEvent("model-loading", "Speech", "Loading speech models", "");
-      
-      speechProcessorRef.current = new SpeechProcessor({
-        onThoughtReceived: (thought: string, index: number) => {
-          addTimelineEvent("openai-thought", "OpenAI", `Speech Thought ${index + 1}`, thought);
-        },
-        onTranscriptionReceived: (text: string) => {
-          addTimelineEvent("whisper-transcription", "Whisper", "Speech Transcribed", text);
-          // Add transcribed text as a user message
-          const userMessage: Message = {
-            id: Date.now().toString(),
-            role: "user",
-            content: text,
-          };
-          setMessages((prev) => [...prev, userMessage]);
-        },
-        onImmediateResponse: (response: string) => {
-          addTimelineEvent("smollm-response", "SmolLM", "Immediate Speech Response", response);
-          // Add immediate response as assistant message
-          const assistantMessage: Message = {
-            id: (Date.now() + 1).toString(),
-            role: "assistant",
-            content: response,
-            processedContent: response,
-          };
-          setMessages((prev) => [...prev, assistantMessage]);
-        },
-        onEnhancedResponse: (response: string) => {
-          addTimelineEvent("smollm-enhanced", "SmolLM", "Enhanced Speech Response", response);
-          // Update the last assistant message with enhanced content
-          setMessages((prev) => {
-            const newMessages = [...prev];
-            for (let i = newMessages.length - 1; i >= 0; i--) {
-              if (newMessages[i].role === "assistant") {
-                newMessages[i] = {
-                  ...newMessages[i],
-                  processedContent: (newMessages[i].processedContent || newMessages[i].content) + " " + response
-                };
-                break;
-              }
-            }
-            return newMessages;
-          });
-        },
-        onStatusChange: (status: string, message: string) => {
-          if (status === 'ready') {
-            const voices = speechProcessorRef.current?.getVoices() || {};
-            setAvailableVoices(voices);
-            addTimelineEvent("model-ready", "Speech", "Speech models ready", "");
-          } else if (status === 'recording_start') {
-            setIsListening(true);
-            addTimelineEvent("recording-start", "VAD", "Voice detected", "");
-          } else if (status === 'recording_end') {
-            setIsListening(false);
-            addTimelineEvent("recording-end", "VAD", "Processing speech", "");
-          }
-        },
-        onTTSCompleted: (text: string) => {
-          addTimelineEvent("tts-end", "TTS", "Speech TTS Completed", text);
-        },
-        enableTTS: true,
-      });
-
-      try {
-        await speechProcessorRef.current.initialize();
-        setSpeechEnabled(true);
-        setSpeechLoading(false);
-        console.log("Speech processor ready");
-      } catch (error) {
-        console.error("Failed to initialize speech processor:", error);
-        addTimelineEvent("tts-end", "Speech", "Speech initialization failed", "");
-        setSpeechLoading(false);
-      }
-    } else if (speechEnabled && speechProcessorRef.current && !isRecording) {
-      // Start recording
-      try {
-        await speechProcessorRef.current.startRecording();
-        setIsRecording(true);
-      } catch (error) {
-        console.error("Failed to start recording:", error);
-      }
-    } else if (speechEnabled && speechProcessorRef.current && isRecording) {
-      // Stop recording
-      try {
-        await speechProcessorRef.current.stopRecording();
-        setIsRecording(false);
-        setIsListening(false);
-      } catch (error) {
-        console.error("Failed to stop recording:", error);
-      }
-    }
-  };
+  }, [selectedVoice]);
 
   return (
-    <div className="flex relative w-full">
-      <Timeline events={timelineEvents} startTime={conversationStartTime} />
-      <div className="flex flex-col flex-1 bg-background">
-      {/* Header */}
-      <div className="flex flex-col gap-2 p-4 border-b bg-muted/50">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Bot className="h-5 w-5 text-primary" />
-            <span className="font-semibold">Conversational Filler Demo</span>
-          </div>
-          <div className="flex items-center gap-2">
-{/* TTS is now handled by speech processor - button hidden */}
-            <Button
-              onClick={toggleSpeech}
-              variant="outline"
-              size="sm"
-              disabled={modelLoading || speechLoading}
-              title={
-                speechLoading 
-                  ? "Loading speech models..." 
-                  : !speechEnabled 
-                  ? "Enable Speech Mode" 
-                  : isRecording 
-                  ? "Stop Recording" 
-                  : "Start Recording"
-              }
-              className={isListening ? "bg-red-100 border-red-300" : ""}
-            >
-              {speechLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : !speechEnabled ? (
-                <MicOff className="h-4 w-4" />
-              ) : isRecording ? (
-                <Mic className={`h-4 w-4 ${isListening ? "text-red-500" : "text-green-500"}`} />
-              ) : (
-                <Mic className="h-4 w-4 text-gray-500" />
+    <div className="flex h-full w-full overflow-hidden">
+      {/* Timeline - Left Side */}
+      <Timeline 
+        events={timelineEvents} 
+        conversationStartTime={conversationStartTime}
+        mode={mode}
+      />
+      
+      {/* Main Chat Area - Right Side */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header - Fixed */}
+        <div className="bg-card border-b px-6 py-3 flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ModeSwitcher 
+                currentMode={mode}
+                onModeChange={handleModeChange}
+                disabled={modelLoading || isLoading}
+              />
+              
+              {mode === 'voice' && Object.keys(availableVoices).length > 0 && (
+                <select
+                  value={selectedVoice}
+                  onChange={(e) => setSelectedVoice(e.target.value)}
+                  className="text-sm px-2 py-1 border rounded-md bg-background"
+                  disabled={modelLoading}
+                >
+                  {Object.entries(availableVoices).map(([id, voice]: [string, any]) => (
+                    <option key={id} value={id}>
+                      {voice.name || id}
+                    </option>
+                  ))}
+                </select>
               )}
-            </Button>
-            <ThemeToggle />
-            <Button
-              onClick={clearChat}
-              variant="outline"
-              size="sm"
-              disabled={isLoading}
-            >
-              Clear Chat
-            </Button>
-          </div>
-        </div>
-
-        <div className="text-xs text-muted-foreground">
-          {modelLoading
-            ? modelLoadingProgress || "Loading SmolLM..."
-            : speechLoading
-            ? "Loading speech models (VAD, Whisper, TTS)..."
-            : ttsLoading
-            ? "Loading TTS model..."
-            : `Fine-tuned SmolLM runs in browser • OpenAI provides thoughts • TTS enabled${speechEnabled ? " • Speech ready" : ""}${isRecording ? " • Recording active" : ""}${isListening ? " • Listening..." : ""}`}
-        </div>
-      </div>
-
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && (
-          <div className="text-center text-muted-foreground py-8">
-            <Bot className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p className="text-lg font-medium mb-2">Start a conversation</p>
-            <p className="text-sm">
-              Browser-based SmolLM processes OpenAI thoughts locally.<br/>
-              Enable speech mode for voice conversations with VAD, Whisper ASR & TTS.
-            </p>
-            {modelLoading && (
-              <div className="mt-4">
-                <Loader2 className="h-4 w-4 animate-spin mx-auto mb-2" />
-                <p className="text-xs">{modelLoadingProgress}</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex gap-3 ${
-              message.role === "user" ? "justify-end" : "justify-start"
-            }`}
-          >
-            {message.role === "assistant" && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center">
-                <Bot className="h-4 w-4" />
-              </div>
-            )}
-            <div
-              className={`flex-1 max-w-[80%] rounded-lg px-3 py-2 ${
-                message.role === "user"
-                  ? "bg-primary text-primary-foreground ml-12"
-                  : "bg-muted mr-12"
-              }`}
-            >
-              <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                {message.role === "assistant" && message.processedContent
-                  ? message.processedContent
-                  : message.content}
-                {message.role === "assistant" &&
-                  isLoading &&
-                  !message.processedContent && (
-                    <span className="inline-block w-2 h-4 bg-foreground ml-1 animate-pulse" />
-                  )}
-              </p>
             </div>
-            {message.role === "user" && (
-              <div className="flex-shrink-0 w-8 h-8 rounded-full bg-muted text-muted-foreground flex items-center justify-center">
-                <User className="h-4 w-4" />
+            
+            <div className="flex items-center gap-2">
+              <Button
+                onClick={clearChat}
+                variant="outline"
+                size="sm"
+                disabled={messages.length === 0}
+              >
+                Clear
+              </Button>
+              
+              <ThemeToggle />
+            </div>
+          </div>
+          
+          {/* Status Bar */}
+          <div className="mt-2 text-sm text-muted-foreground flex items-center gap-2">
+            {modelLoading ? (
+              modelLoadingProgress || "Loading models..."
+            ) : mode === 'text' ? (
+              "Text mode: Type messages to chat with SmolLM enhanced by OpenAI thoughts"
+            ) : (
+              <>
+                {isListening ? (
+                  <div className="flex items-center gap-2">
+                    <Mic className="h-4 w-4 text-red-500 animate-pulse" />
+                    <span className="text-red-500">Listening...</span>
+                  </div>
+                ) : (
+                  "Voice mode: Speak naturally and I'll respond with voice"
+                )}
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Messages Area - Scrollable */}
+        <div className="flex-1 overflow-y-auto px-4 py-3 bg-background">
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground">
+              <Bot className="h-16 w-16 mb-4 opacity-20" />
+              <h2 className="text-xl font-medium mb-2">Welcome to Conversational Filler</h2>
+              <p className="text-sm max-w-md">
+                {mode === 'text' 
+                  ? "Type a message below to start chatting with SmolLM, enhanced by OpenAI's contextual thoughts."
+                  : "Just start speaking! I'm always listening and will respond with voice."}
+              </p>
+              {modelLoading && (
+                <div className="mt-6">
+                  <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                  <p className="text-xs">{modelLoadingProgress}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-4">
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div className={`flex gap-3 max-w-[70%] ${message.role === "user" ? "flex-row-reverse" : ""}`}>
+                  <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                    message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
+                  }`}>
+                    {message.role === "user" ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                  </div>
+                  <div className={`px-4 py-2 rounded-lg ${
+                    message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
+                  }`}>
+                    <p className="text-sm whitespace-pre-wrap">
+                      {message.processedContent || message.content}
+                    </p>
+                    {message.thoughts && message.thoughts.length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-current opacity-50">
+                        <p className="text-xs font-medium mb-1">OpenAI Thoughts:</p>
+                        {message.thoughts.map((thought, idx) => (
+                          <p key={idx} className="text-xs">• {thought}</p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {isLoading && (
+              <div className="flex justify-start">
+                <div className="flex gap-3 max-w-[70%]">
+                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-muted flex items-center justify-center">
+                    <Bot className="h-4 w-4" />
+                  </div>
+                  <div className="px-4 py-2 rounded-lg bg-muted">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  </div>
+                </div>
               </div>
             )}
           </div>
-        ))}
-      </div>
+          
+          <div ref={messagesEndRef} />
+        </div>
 
-      {/* Input */}
-      <div className="border-t p-4">
-        <form onSubmit={handleSubmit} className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={
-              modelLoading ? "Waiting for model to load..." : "Ask anything..."
-            }
-            className="flex-1 px-3 py-2 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-            disabled={isLoading || modelLoading}
-          />
-          <Button
-            type="submit"
-            disabled={!input.trim() || isLoading || modelLoading}
-            size="sm"
-          >
-            <Send className="h-4 w-4" />
-          </Button>
-        </form>
+        {/* Input Area - Fixed at Bottom */}
+        <div className="border-t bg-card px-4 py-3 flex-shrink-0">
+          <form onSubmit={handleSubmit} className="flex gap-3">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={
+                modelLoading 
+                  ? "Waiting for models to load..." 
+                  : mode === 'voice'
+                  ? "Type a message or use voice recording..."
+                  : "Type your message..."
+              }
+              className="flex-1 px-4 py-2 border rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={isLoading || modelLoading}
+            />
+            <Button
+              type="submit"
+              disabled={!input.trim() || isLoading || modelLoading}
+            >
+              <Send className="h-4 w-4 mr-2" />
+              Send
+            </Button>
+          </form>
+        </div>
       </div>
-    </div>
     </div>
   );
 }

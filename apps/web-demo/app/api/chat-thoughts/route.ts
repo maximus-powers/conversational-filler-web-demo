@@ -19,7 +19,7 @@ export async function POST(req: Request) {
     
     const conversationText = conversationLines.join('\n');
 
-    const result = streamText({
+    const result = await streamText({
       model: openai("gpt-4o"),
       messages: [
         {
@@ -63,13 +63,39 @@ ${conversationText}`
       ],
       temperature: 1,
     });
-    return result.toTextStreamResponse();
+
+    // Collect the full response text
+    let fullText = '';
+    for await (const chunk of result.textStream) {
+      fullText += chunk;
+    }
+
+    // Extract thoughts from the response
+    const thoughts: string[] = [];
+    const regex = /\[bt\](.*?)\[et\]/g;
+    let match;
+    while ((match = regex.exec(fullText)) !== null) {
+      const thought = match[1].trim();
+      if (thought) {
+        thoughts.push(thought);
+      }
+    }
+
+    // Return thoughts as JSON
+    return new Response(
+      JSON.stringify({ thoughts }),
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   } catch (error) {
     console.error("AI SDK pipeline error:", error);
     return new Response(
       JSON.stringify({
         error: "Failed to process request",
         details: error instanceof Error ? error.message : "Unknown error",
+        thoughts: []
       }),
       {
         status: 500,

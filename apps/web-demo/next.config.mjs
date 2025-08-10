@@ -2,7 +2,7 @@
 const nextConfig = {
   transpilePackages: ["@workspace/ui"],
   serverExternalPackages: ['sharp', 'onnxruntime-node'],
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, webpack }) => {
     // transformers.js browser/node compatibility
     if (!isServer) {
       config.resolve.alias = {

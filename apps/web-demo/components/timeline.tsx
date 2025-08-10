@@ -6,21 +6,22 @@ import { Bot, Brain, Volume2, Clock, DownloadCloud, CheckCircle, Maximize2, Mini
 export interface TimelineEvent {
   id: string;
   timestamp: number;
-  type: "smollm-response" | "openai-thought" | "smollm-enhanced" | "tts-start" | "tts-end" | "model-loading" | "model-ready" | "whisper-transcription" | "recording-start" | "recording-end";
-  model: "SmolLM" | "OpenAI" | "TTS" | "Speech" | "Whisper" | "VAD";
+  type: string;
+  model: string;
   message: string;
   content: string;
   fullContent?: string;
 }
 
-export function Timeline({ events, startTime }: {
+export function Timeline({ events, conversationStartTime, mode }: {
   events: TimelineEvent[];
-  startTime: number | null;
+  conversationStartTime: number | null;
+  mode?: 'text' | 'voice';
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const getRelativeTime = (timestamp: number) => {
-    if (!startTime) return "0ms";
-    return `${timestamp - startTime}ms`;
+    if (!conversationStartTime) return "0ms";
+    return `${timestamp - conversationStartTime}ms`;
   };
 
   const getEventIcon = (type: TimelineEvent["type"]) => {
