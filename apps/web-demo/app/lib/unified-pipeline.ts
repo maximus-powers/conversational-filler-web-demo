@@ -197,6 +197,8 @@ export class UnifiedPipeline {
 
     // The worker sends { type: 'output', text: string, result: Float32Array }
     const audioBuffer = data.result;
+    console.log('Handling audio output, buffer length:', audioBuffer?.length, 'text:', data.text);
+    
     if (audioBuffer instanceof Float32Array && this.playbackNode) {
       this.state.isPlaying = true;
       this.playbackNode.port.postMessage(audioBuffer);
@@ -204,8 +206,10 @@ export class UnifiedPipeline {
   }
 
   private async setupAudioContexts(): Promise<void> {
+    // Use 24000 Hz to match TTS output sample rate
+    // The browser will resample microphone input as needed
     this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
-      sampleRate: INPUT_SAMPLE_RATE,
+      sampleRate: 24000,
     });
 
     // Register play worklet for TTS output  
@@ -213,6 +217,17 @@ export class UnifiedPipeline {
     
     this.playbackNode = new AudioWorkletNode(this.audioContext, 'play-worklet');
     this.playbackNode.connect(this.audioContext.destination);
+    
+    // Listen for playback ended messages
+    this.playbackNode.port.onmessage = (event) => {
+      if (event.data.type === 'playback_ended') {
+        this.state.isPlaying = false;
+        // Notify worker that playback has ended
+        if (this.worker) {
+          this.worker.postMessage({ type: 'playback_ended' });
+        }
+      }
+    };
 
     // Setup microphone for voice mode
     await this.setupMicrophone();

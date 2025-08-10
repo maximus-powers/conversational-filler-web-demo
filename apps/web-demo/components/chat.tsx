@@ -108,7 +108,7 @@ export function Chat() {
         },
         
         onThoughtReceived: (thought, index) => {
-          addTimelineEvent("openai-thought", "OpenAI", `Thought ${index + 1}`, thought);
+          // Timeline event is already added in unified-pipeline
         },
         
         onTranscriptionReceived: (text) => {

@@ -11,6 +11,7 @@ import {
 } from "@huggingface/transformers";
 
 import { KokoroTTS, TextSplitterStream } from "kokoro-js";
+console.log('KokoroTTS imported:', typeof KokoroTTS, 'TextSplitterStream:', typeof TextSplitterStream);
 
 // Wrap everything in async IIFE to handle top-level await
 (async () => {
@@ -40,11 +41,32 @@ self.postMessage({
 
 // Initialize TTS
 const model_id = "onnx-community/Kokoro-82M-v1.0-ONNX";
-let voice = "af_heart"; // Default voice
-const tts = await KokoroTTS.from_pretrained(model_id, {
-  dtype: "fp32",
-  device: "webgpu",
-});
+let voice; // Will be set later or use default
+let tts;
+
+try {
+  console.log('Initializing TTS with model:', model_id);
+  
+  // Check if WebGPU is available in worker
+  const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator;
+  console.log('WebGPU available in worker:', hasWebGPU);
+  
+  // Try with wasm if webgpu isn't available
+  const ttsDevice = hasWebGPU ? "webgpu" : "wasm";
+  console.log('Using device for TTS:', ttsDevice);
+  
+  tts = await KokoroTTS.from_pretrained(model_id, {
+    dtype: "fp32",
+    device: ttsDevice,
+  });
+  console.log('TTS initialized successfully');
+  console.log('Available voices:', tts.voices ? Object.keys(tts.voices) : 'No voices found');
+  
+  
+} catch (error) {
+  console.error('Failed to initialize TTS:', error);
+  self.postMessage({ type: "error", error: `TTS initialization failed: ${error.message}` });
+}
 
 // Load VAD model
 const silero_vad = await AutoModel.from_pretrained(
@@ -94,6 +116,13 @@ const llm = await pipeline("text-generation", llm_model_id, {
 await llm("test", { max_new_tokens: 1 }); // Compile shaders
 
 let messages = [];
+
+// Set default voice if not already set
+if (!voice && tts.voices) {
+  voice = Object.keys(tts.voices)[0] || "af_heart";
+  console.log('Setting default voice:', voice);
+}
+
 self.postMessage({
   type: "status",
   status: "ready",
@@ -136,21 +165,9 @@ async function vad(buffer) {
 }
 
 /**
- * Generate thoughts from OpenAI for the conversation - OUR API ENDPOINT
+ * Generate and process thoughts from OpenAI - streaming version
  */
-const generateThoughts = async (conversationHistory) => {
-  // Build conversation lines for OpenAI
-  const conversationLines = [];
-  for (const msg of conversationHistory) {
-    if (msg.role === 'user') {
-      conversationLines.push(`User: ${msg.content}`);
-    } else if (msg.role === 'assistant') {
-      conversationLines.push(`Responder: ${msg.content}`);
-    }
-  }
-  
-  const conversationText = conversationLines.join('\n');
-
+const generateAndProcessThoughts = async (conversationHistory, userInput, immediateResponse, splitter) => {
   // Use our Next.js API endpoint
   const response = await fetch('/api/chat-thoughts', {
     method: 'POST',
@@ -167,73 +184,97 @@ const generateThoughts = async (conversationHistory) => {
     return [];
   }
 
-  // Our API returns JSON with thoughts array
-  const data = await response.json();
-  const thoughts = data.thoughts || [];
-  
-  // Send each thought as it's received
-  thoughts.forEach(thought => {
-    self.postMessage({ type: "thought", thought });
-  });
-  
-  return thoughts;
-};
+  // Stream thoughts as they arrive
+  const reader = response.body?.getReader();
+  if (!reader) return [];
 
-/**
- * Process thoughts and generate enhanced responses
- */
-const processThoughts = async (thoughts, userInput) => {
-  const responses = [];
-  
-  for (const thought of thoughts) {
-    // Build context including previous responses
-    let contextPrompt = `<|im_start|>user\n${userInput}<|im_end|>\n`;
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const thoughts = [];
+  let thoughtIndex = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
     
-    // Add previous responses if any
-    responses.forEach((resp, idx) => {
-      if (idx < thoughts.length) {
-        contextPrompt += `<|im_start|>knowledge\n${thoughts[idx]}<|im_end|>\n`;
+    const chunk = decoder.decode(value, { stream: true });
+    buffer += chunk;
+
+    // Extract thoughts from buffer with [bt] and [et] markers
+    let startIndex = buffer.indexOf('[bt]');
+    while (startIndex !== -1) {
+      const endIndex = buffer.indexOf('[et]', startIndex);
+      if (endIndex !== -1) {
+        const thought = buffer.substring(startIndex + 4, endIndex).trim();
+        if (thought && !thoughts.includes(thought)) {
+          thoughts.push(thought);
+          
+          // Send thought immediately as it's found
+          self.postMessage({ type: "thought", thought, index: thoughtIndex++ });
+          
+          // Process this thought immediately to generate enhanced response
+          let contextPrompt = `<|im_start|>user\n${userInput}<|im_end|>\n`;
+          if (immediateResponse) {
+            contextPrompt += `<|im_start|>assistant\n${immediateResponse}<|im_end|>\n`;
+          }
+          contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n<|im_start|>assistant\n`;
+
+          const result = await llm(contextPrompt, {
+            max_new_tokens: 50,
+            temperature: 1,
+            do_sample: false,
+            return_full_text: false,
+            repetition_penalty: 1.2,
+            top_p: 0.9,
+            top_k: 50,
+            pad_token_id: 2,
+            eos_token_id: 2,
+          });
+
+          let response = "";
+          if (Array.isArray(result) && result[0]?.generated_text) {
+            response = result[0].generated_text;
+          } else if (result?.generated_text) {
+            response = result.generated_text;
+          }
+          
+          response = response
+            .replace(/<\|im_start\|>/g, "")
+            .replace(/<\|im_end\|>/g, "")
+            .replace(/^assistant\s*/i, "")
+            .split("\n")[0]
+            .trim();
+
+          if (response) {
+            // Send enhanced response message regardless of TTS
+            self.postMessage({ type: "enhanced_response", response });
+            
+            // Add to TTS stream if available
+            if (splitter) {
+              console.log('Pushing enhanced response to TTS splitter:', response);
+              splitter.push(" " + response);
+            }
+          }
+        }
+        // Remove processed thought from buffer
+        buffer = buffer.substring(endIndex + 4);
+        startIndex = buffer.indexOf('[bt]');
+      } else {
+        // No complete thought yet, wait for more chunks
+        break;
       }
-      contextPrompt += `<|im_start|>assistant\n${resp}<|im_end|>\n`;
-    });
-    
-    // Add current thought
-    contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n<|im_start|>assistant\n`;
-
-    const result = await llm(contextPrompt, {
-      max_new_tokens: 50,
-      temperature: 1,
-      do_sample: false,
-      return_full_text: false,
-      repetition_penalty: 1.2,
-      top_p: 0.9,
-      top_k: 50,
-      pad_token_id: 2,
-      eos_token_id: 2,
-    });
-
-    let response = "";
-    if (Array.isArray(result) && result[0]?.generated_text) {
-      response = result[0].generated_text;
-    } else if (result?.generated_text) {
-      response = result.generated_text;
     }
-    
-    response = response
-      .replace(/<\|im_start\|>/g, "")
-      .replace(/<\|im_end\|>/g, "")
-      .replace(/^assistant\s*/i, "")
-      .split("\n")[0]
-      .trim();
 
-    if (response) {
-      responses.push(response);
-      self.postMessage({ type: "enhanced_response", response });
+    // Check for [done] token
+    if (buffer.includes('[done]')) {
+      break;
     }
   }
 
-  return responses;
+  return thoughts;
 };
+
+// processThoughts function removed - now integrated into generateAndProcessThoughts
 
 /**
  * Transcribe the audio buffer and generate responses - FOLLOWING WEBGPU-DEMO
@@ -253,14 +294,61 @@ const speechToSpeech = async (buffer) => {
   self.postMessage({ type: "transcription", text });
 
   // Set up text-to-speech streaming
+  if (!tts) {
+    console.error('TTS not initialized, cannot speak response');
+    return;
+  }
+  
   const splitter = new TextSplitterStream();
-  const stream = tts.stream(splitter, {
-    voice,
-  });
+  console.log('Creating TTS stream with voice:', voice, 'TTS object:', tts);
+  
+  // Create stream - note: don't pass voice if it's undefined
+  const streamOptions = voice ? { voice } : {};
+  const stream = tts.stream(splitter, streamOptions);
+  console.log('TTS stream created successfully with options:', streamOptions);
+  
+  // Start TTS processing in background
   (async () => {
-    for await (const { text, audio } of stream) {
-      self.postMessage({ type: "output", text, result: audio });
+    let chunkCount = 0;
+    self.postMessage({ type: "tts_start", text: "Starting TTS" });
+    
+    try {
+      for await (const chunk of stream) {
+        chunkCount++;
+        console.log(`TTS chunk ${chunkCount}:`, chunk);
+        
+        // Extract audio from RawAudio object
+        let audioData;
+        const text = chunk.text || chunk.content || '';
+        
+        if (chunk.audio) {
+          // Check if it's a RawAudio object with nested audio property
+          if (chunk.audio.audio && chunk.audio.audio instanceof Float32Array) {
+            audioData = chunk.audio.audio;
+            console.log(`  - Extracted audio from RawAudio object, length=${audioData.length}, sample_rate=${chunk.audio.sampling_rate}`);
+          } else if (chunk.audio instanceof Float32Array) {
+            audioData = chunk.audio;
+            console.log(`  - Audio is direct Float32Array, length=${audioData.length}`);
+          } else {
+            console.log(`  - Unknown audio format:`, chunk.audio);
+          }
+        }
+        
+        console.log(`  - text="${text}", audio extracted=${!!audioData}, audio length=${audioData?.length}`);
+        
+        if (audioData && audioData.length > 0) {
+          // Don't resample - let the audio context handle the sample rate
+          // The play-worklet will play at the correct rate
+          console.log(`  - Sending audio at original sample rate: ${chunk.audio.sampling_rate || 'unknown'}Hz`);
+          self.postMessage({ type: "output", text: text, result: audioData });
+        }
+      }
+    } catch (error) {
+      console.error('Error in TTS stream:', error);
     }
+    
+    console.log('TTS stream completed, total chunks:', chunkCount);
+    self.postMessage({ type: "tts_end", text: "TTS complete" });
   })();
 
   // 2. Generate immediate response using the SmolLM conversation filler model
@@ -291,28 +379,29 @@ const speechToSpeech = async (buffer) => {
 
   if (immediateResponse) {
     messages.push({ role: "assistant", content: immediateResponse });
-    splitter.push(immediateResponse);
+    console.log('Pushing immediate response to TTS splitter:', immediateResponse);
+    
+    // Push text to TTS
+    try {
+      splitter.push(immediateResponse);
+      console.log('Text pushed to splitter successfully:', immediateResponse);
+    } catch (error) {
+      console.error('Error pushing text to splitter:', error);
+    }
+    
     self.postMessage({ type: "immediate_response", response: immediateResponse });
   }
 
-  // 3. Generate thoughts asynchronously and enhance responses
+  // 3. Generate and process thoughts as they stream in
   try {
-    const thoughts = await generateThoughts(messages);
-    if (thoughts.length > 0) {
-      const enhancedResponses = await processThoughts(thoughts, text);
-      
-      // Add enhanced responses to TTS stream
-      for (const response of enhancedResponses) {
-        splitter.push(" " + response);
-      }
-    }
+    await generateAndProcessThoughts(messages, text, immediateResponse, splitter);
   } catch (error) {
     console.warn("Failed to generate thoughts:", error);
   }
 
   // Finally, close the stream to signal that no more text will be added.
   splitter.close();
-  isPlaying = false;
+  // Don't set isPlaying = false here, wait for playback_ended message
 };
 
 // Track the number of samples after the last speech chunk - EXACTLY FROM WEBGPU-DEMO
@@ -407,13 +496,7 @@ async function processTextMode(text, enableTTS = false) {
       
       // Generate and speak thoughts
       try {
-        const thoughts = await generateThoughts(messages);
-        if (thoughts.length > 0) {
-          const enhancedResponses = await processThoughts(thoughts, text);
-          for (const response of enhancedResponses) {
-            splitter.push(" " + response);
-          }
-        }
+        await generateAndProcessThoughts(messages, text, immediateResponse, splitter);
       } catch (error) {
         console.warn("Failed to generate thoughts:", error);
       }
@@ -422,10 +505,7 @@ async function processTextMode(text, enableTTS = false) {
     } else {
       // Just generate thoughts without TTS
       try {
-        const thoughts = await generateThoughts(messages);
-        if (thoughts.length > 0) {
-          await processThoughts(thoughts, text);
-        }
+        await generateAndProcessThoughts(messages, text, immediateResponse, null);
       } catch (error) {
         console.warn("Failed to generate thoughts:", error);
       }

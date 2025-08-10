@@ -64,31 +64,55 @@ ${conversationText}`
       temperature: 1,
     });
 
-    // Collect the full response text
-    let fullText = '';
-    for await (const chunk of result.textStream) {
-      fullText += chunk;
-    }
-
-    // Extract thoughts from the response
-    const thoughts: string[] = [];
-    const regex = /\[bt\](.*?)\[et\]/g;
-    let match;
-    while ((match = regex.exec(fullText)) !== null) {
-      const thought = match[1].trim();
-      if (thought) {
-        thoughts.push(thought);
+    // Stream thoughts as they're found
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        let buffer = '';
+        const thoughts: string[] = [];
+        
+        for await (const chunk of result.textStream) {
+          buffer += chunk;
+          
+          // Check for complete thoughts in the buffer
+          let startIndex = buffer.indexOf('[bt]');
+          while (startIndex !== -1) {
+            const endIndex = buffer.indexOf('[et]', startIndex);
+            if (endIndex !== -1) {
+              // Found a complete thought
+              const thought = buffer.substring(startIndex + 4, endIndex).trim();
+              if (thought && !thoughts.includes(thought)) {
+                thoughts.push(thought);
+                // Send this thought immediately
+                controller.enqueue(encoder.encode(`[bt]${thought}[et]`));
+              }
+              // Remove processed thought from buffer
+              buffer = buffer.substring(endIndex + 4);
+              startIndex = buffer.indexOf('[bt]');
+            } else {
+              // No complete thought yet, wait for more chunks
+              break;
+            }
+          }
+          
+          // Check for [done] token
+          if (buffer.includes('[done]')) {
+            controller.enqueue(encoder.encode('[done]'));
+            break;
+          }
+        }
+        
+        controller.close();
       }
-    }
+    });
 
-    // Return thoughts as JSON
-    return new Response(
-      JSON.stringify({ thoughts }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }
-    );
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Transfer-Encoding': 'chunked',
+      },
+    });
   } catch (error) {
     console.error("AI SDK pipeline error:", error);
     return new Response(
