@@ -21,7 +21,7 @@ const INPUT_SAMPLE_RATE = 16000;
 const INPUT_SAMPLE_RATE_MS = INPUT_SAMPLE_RATE / 1000;
 const SPEECH_THRESHOLD = 0.3;
 const EXIT_THRESHOLD = 0.1;
-const MIN_SILENCE_DURATION_MS = 400;
+const MIN_SILENCE_DURATION_MS = 1000; // Increased from 400ms to 1 second for more lenient pause detection
 const MIN_SILENCE_DURATION_SAMPLES = MIN_SILENCE_DURATION_MS * INPUT_SAMPLE_RATE_MS;
 const SPEECH_PAD_MS = 80;
 const SPEECH_PAD_SAMPLES = SPEECH_PAD_MS * INPUT_SAMPLE_RATE_MS;
@@ -81,6 +81,7 @@ const silero_vad = await AutoModel.from_pretrained(
 });
 
 // Load Whisper for transcription
+// Use whisper-small for better accuracy (244M params vs 74M in base)
 const DEVICE_DTYPE_CONFIGS = {
   webgpu: {
     encoder_model: "fp32",
@@ -92,6 +93,13 @@ const DEVICE_DTYPE_CONFIGS = {
   },
 };
 
+console.log('Loading Whisper large v3 turbo model for better accuracy...');
+self.postMessage({ 
+  type: "info", 
+  message: "Loading Whisper Large v3 Turbo model (this may take 30-60 seconds)...",
+  duration: "until_next"
+});
+
 const transcriber = await pipeline(
   "automatic-speech-recognition",
   "onnx-community/whisper-base",
@@ -102,6 +110,11 @@ const transcriber = await pipeline(
 ).catch((error) => {
   self.postMessage({ error });
   throw error;
+});
+
+self.postMessage({ 
+  type: "info", 
+  message: "Whisper model loaded successfully"
 });
 
 await transcriber(new Float32Array(INPUT_SAMPLE_RATE)); // Compile shaders

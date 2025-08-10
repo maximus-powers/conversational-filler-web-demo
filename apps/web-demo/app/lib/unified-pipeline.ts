@@ -76,9 +76,10 @@ export class UnifiedPipeline {
 
   private async waitForWorkerReady(): Promise<void> {
     return new Promise((resolve, reject) => {
+      // Increase timeout to 60 seconds for larger models
       const timeout = setTimeout(() => {
-        reject(new Error('Worker initialization timeout'));
-      }, 15000);
+        reject(new Error('Worker initialization timeout - model loading may take longer for large models'));
+      }, 120000);
 
       const checkReady = () => {
         if (this.isWorkerReady) {
@@ -244,7 +245,7 @@ export class UnifiedPipeline {
           sampleRate: INPUT_SAMPLE_RATE,
           echoCancellation: true,
           noiseSuppression: true,
-        },
+        } as MediaTrackConstraints,
       });
       console.log('Microphone permission granted, stream:', this.mediaStream);
 
