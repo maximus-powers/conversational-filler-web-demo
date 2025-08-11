@@ -1,7 +1,18 @@
 "use client";
 
 import React, { useState } from "react";
-import { Bot, Brain, Volume2, Clock, DownloadCloud, CheckCircle, Maximize2, Minimize2, Mic, MicOff } from "lucide-react";
+import {
+  Bot,
+  Brain,
+  Volume2,
+  Clock,
+  DownloadCloud,
+  CheckCircle,
+  Maximize2,
+  Minimize2,
+  Mic,
+  MicOff,
+} from "lucide-react";
 
 export interface TimelineEvent {
   id: string;
@@ -13,10 +24,14 @@ export interface TimelineEvent {
   fullContent?: string;
 }
 
-export function Timeline({ events, conversationStartTime, mode }: {
+export function Timeline({
+  events,
+  conversationStartTime,
+  mode,
+}: {
   events: TimelineEvent[];
   conversationStartTime: number | null;
-  mode?: 'text' | 'voice';
+  mode?: "text" | "voice";
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const getRelativeTime = (timestamp: number) => {
@@ -45,6 +60,12 @@ export function Timeline({ events, conversationStartTime, mode }: {
         return <Mic className="h-3 w-3 text-red-500" />;
       case "recording-end":
         return <MicOff className="h-3 w-3 text-gray-500" />;
+      case "mode-switch":
+        return <Clock className="h-3 w-3 text-indigo-500" />;
+      case "user-input":
+        return <Brain className="h-3 w-3 text-cyan-500" />;
+      case "error":
+        return <Clock className="h-3 w-3 text-red-600" />;
       default:
         return <Clock className="h-3 w-3 text-gray-500" />;
     }
@@ -71,6 +92,12 @@ export function Timeline({ events, conversationStartTime, mode }: {
         return "border-red-500 bg-red-50 dark:bg-red-950";
       case "recording-end":
         return "border-gray-500 bg-gray-50 dark:bg-gray-950";
+      case "mode-switch":
+        return "border-indigo-500 bg-indigo-50 dark:bg-indigo-950";
+      case "user-input":
+        return "border-cyan-500 bg-cyan-50 dark:bg-cyan-950";
+      case "error":
+        return "border-red-600 bg-red-50 dark:bg-red-950";
       default:
         return "border-gray-500 bg-gray-50 dark:bg-gray-950";
     }
@@ -78,7 +105,9 @@ export function Timeline({ events, conversationStartTime, mode }: {
 
   if (events.length === 0) {
     return (
-      <div className={`${isExpanded ? 'absolute inset-0 z-50 bg-background border shadow-lg' : 'w-64 border-r bg-background/50'} flex flex-col h-full`}>
+      <div
+        className={`${isExpanded ? "absolute inset-0 z-50 bg-background border shadow-lg" : "w-64 border-r bg-background/50"} flex flex-col h-full`}
+      >
         <div className="p-4 border-b">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold flex items-center gap-2">
@@ -108,7 +137,9 @@ export function Timeline({ events, conversationStartTime, mode }: {
   }
 
   return (
-    <div className={`${isExpanded ? 'absolute inset-0 z-50 bg-background border shadow-lg' : 'w-64 border-r bg-background/50'} flex flex-col h-full`}>
+    <div
+      className={`${isExpanded ? "absolute inset-0 z-50 bg-background border shadow-lg" : "w-64 border-r bg-background/50"} flex flex-col h-full`}
+    >
       <div className="p-4 border-b">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold flex items-center gap-2">
@@ -128,41 +159,61 @@ export function Timeline({ events, conversationStartTime, mode }: {
           </button>
         </div>
       </div>
-      
+
       <div className="flex-1 overflow-y-auto p-4">
         <div className="relative">
-          <div className={`absolute left-4 top-0 bottom-0 w-px bg-border ${isExpanded ? 'hidden' : ''}`} />
-          
-          <div className={`${isExpanded ? 'space-y-6' : 'space-y-3'}`}>
-          {events.map((event) => (
-            <div key={event.id} className={`relative flex items-start ${isExpanded ? 'gap-4' : 'gap-3'}`}>
-              <div className={`flex-shrink-0 ${isExpanded ? 'w-10 h-10' : 'w-8 h-8'} rounded-full border-2 bg-background flex items-center justify-center relative z-10`}>
-                {getEventIcon(event.type)}
-              </div>
-              <div className={`flex-1 min-w-0 ${isExpanded ? 'p-4' : 'p-2'} rounded border-l-2 ${getEventColor(event.type)}`}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className={`${isExpanded ? 'text-sm' : 'text-xs'} font-medium text-muted-foreground`}>
-                    {getRelativeTime(event.timestamp)}
-                  </span>
-                  <span className={`${isExpanded ? 'text-sm' : 'text-xs'} font-mono text-muted-foreground`}>
-                    {event.model}
-                  </span>
-                </div>
-                
-                <div className={`${isExpanded ? 'text-sm' : 'text-xs'} text-white-foreground`}>
-                  {event.message}
-                </div>
-                
-                {event.content && (
-                  <div className={`${isExpanded ? 'text-sm' : 'text-xs'} text-foreground mt-1 bg-background/50 rounded ${isExpanded ? 'px-3 py-2' : 'px-1 py-0.5'} ${isExpanded ? 'whitespace-pre-wrap' : 'truncate'}`}>
-                    &ldquo;{isExpanded && event.fullContent ? event.fullContent : event.content}&rdquo;
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-          </div>
+          <div
+            className={`absolute left-4 top-0 bottom-0 w-px bg-border ${isExpanded ? "hidden" : ""}`}
+          />
 
+          <div className={`${isExpanded ? "space-y-6" : "space-y-3"}`}>
+            {events.map((event) => (
+              <div
+                key={event.id}
+                className={`relative flex items-start ${isExpanded ? "gap-4" : "gap-3"}`}
+              >
+                <div
+                  className={`flex-shrink-0 ${isExpanded ? "w-10 h-10" : "w-8 h-8"} rounded-full border-2 bg-background flex items-center justify-center relative z-10`}
+                >
+                  {getEventIcon(event.type)}
+                </div>
+                <div
+                  className={`flex-1 min-w-0 ${isExpanded ? "p-4" : "p-2"} rounded border-l-2 ${getEventColor(event.type)}`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span
+                      className={`${isExpanded ? "text-sm" : "text-xs"} font-medium text-muted-foreground`}
+                    >
+                      {getRelativeTime(event.timestamp)}
+                    </span>
+                    <span
+                      className={`${isExpanded ? "text-sm" : "text-xs"} font-mono text-muted-foreground`}
+                    >
+                      {event.model}
+                    </span>
+                  </div>
+
+                  <div
+                    className={`${isExpanded ? "text-sm" : "text-xs"} text-white-foreground`}
+                  >
+                    {event.message}
+                  </div>
+
+                  {event.content && (
+                    <div
+                      className={`${isExpanded ? "text-sm" : "text-xs"} text-foreground mt-1 bg-background/50 rounded ${isExpanded ? "px-3 py-2" : "px-1 py-0.5"} ${isExpanded ? "whitespace-pre-wrap" : "truncate"}`}
+                    >
+                      &ldquo;
+                      {isExpanded && event.fullContent
+                        ? event.fullContent
+                        : event.content}
+                      &rdquo;
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

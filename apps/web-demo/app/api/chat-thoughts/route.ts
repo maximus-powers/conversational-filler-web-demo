@@ -6,9 +6,9 @@ export async function POST(req: Request) {
     const { messages } = await req.json();
     const conversationLines = [];
     for (const msg of messages) {
-      if (msg.role === 'user') {
+      if (msg.role === "user") {
         conversationLines.push(`User: ${msg.content}`);
-      } else if (msg.role === 'assistant') {
+      } else if (msg.role === "assistant") {
         const responseText = msg.processedContent || msg.content;
         if (responseText && responseText.trim()) {
           const cleanedResponse = responseText.trim() + " ";
@@ -16,8 +16,8 @@ export async function POST(req: Request) {
         }
       }
     }
-    
-    const conversationText = conversationLines.join('\n');
+
+    const conversationText = conversationLines.join("\n");
 
     const result = await streamText({
       model: openai("gpt-4o"),
@@ -54,12 +54,12 @@ Your thoughts for responding: Oh very nice! Can I see photos of the cherry bloss
 Your response: [bt]Can I see photos?[et][bt]I haven't been yet.[et]Hope I don't miss.[et][done]
 
 Here is the conversation:
-${conversationText}`
+${conversationText}`,
         },
         {
-          role: "user", 
-          content: "Generate thoughts for this conversation."
-        }
+          role: "user",
+          content: "Generate thoughts for this conversation.",
+        },
       ],
       temperature: 1,
     });
@@ -67,16 +67,16 @@ ${conversationText}`
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
-        let buffer = '';
+        let buffer = "";
         const thoughts: string[] = [];
-        
+
         for await (const chunk of result.textStream) {
           buffer += chunk;
-          
+
           // parse thoughts
-          let startIndex = buffer.indexOf('[bt]');
+          let startIndex = buffer.indexOf("[bt]");
           while (startIndex !== -1) {
-            const endIndex = buffer.indexOf('[et]', startIndex);
+            const endIndex = buffer.indexOf("[et]", startIndex);
             if (endIndex !== -1) {
               const thought = buffer.substring(startIndex + 4, endIndex).trim();
               if (thought && !thoughts.includes(thought)) {
@@ -84,28 +84,28 @@ ${conversationText}`
                 controller.enqueue(encoder.encode(`[bt]${thought}[et]`));
               }
               buffer = buffer.substring(endIndex + 4);
-              startIndex = buffer.indexOf('[bt]');
+              startIndex = buffer.indexOf("[bt]");
             } else {
               // no complete thought yet
               break;
             }
           }
-          
-          if (buffer.includes('[done]')) {
-            controller.enqueue(encoder.encode('[done]'));
+
+          if (buffer.includes("[done]")) {
+            controller.enqueue(encoder.encode("[done]"));
             break;
           }
         }
-        
+
         controller.close();
-      }
+      },
     });
 
     return new Response(stream, {
       status: 200,
       headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Transfer-Encoding': 'chunked',
+        "Content-Type": "text/plain; charset=utf-8",
+        "Transfer-Encoding": "chunked",
       },
     });
   } catch (error) {
@@ -114,7 +114,7 @@ ${conversationText}`
       JSON.stringify({
         error: "Failed to process request",
         details: error instanceof Error ? error.message : "Unknown error",
-        thoughts: []
+        thoughts: [],
       }),
       {
         status: 500,

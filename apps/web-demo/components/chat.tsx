@@ -2,7 +2,7 @@
 
 import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
-import { Bot, User, Loader2, Send, Mic, MicOff, MessageSquare } from "lucide-react";
+import { Bot, User, Loader2, Send, Mic, MicOff } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import { UnifiedPipeline, AppMode } from "../app/lib/unified-pipeline";
 import { Timeline, TimelineEvent } from "./timeline";
@@ -23,11 +23,15 @@ export function Chat() {
   const [modelLoading, setModelLoading] = useState(true);
   const [modelLoadingProgress, setModelLoadingProgress] = useState<string>("");
   const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
-  const [conversationStartTime, setConversationStartTime] = useState<number | null>(null);
+  const [conversationStartTime, setConversationStartTime] = useState<
+    number | null
+  >(null);
   const [mode, setMode] = useState<AppMode>("text");
   const [isListening, setIsListening] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState<string>("af_heart");
-  const [availableVoices, setAvailableVoices] = useState<Record<string, any>>({});
+  const [availableVoices, setAvailableVoices] = useState<Record<string, any>>(
+    {},
+  );
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -43,7 +47,7 @@ export function Chat() {
     type: TimelineEvent["type"],
     model: TimelineEvent["model"],
     message: string,
-    content: string = ""
+    content: string = "",
   ) => {
     const event: TimelineEvent = {
       id: `${Date.now()}-${Math.random()}`,
@@ -54,7 +58,7 @@ export function Chat() {
       content: content.slice(0, 50) + (content.length > 50 ? "..." : ""),
       fullContent: content,
     };
-    setTimelineEvents(prev => [...prev, event]);
+    setTimelineEvents((prev) => [...prev, event]);
   };
 
   const clearTimeline = () => {
@@ -67,12 +71,16 @@ export function Chat() {
     const initializePipeline = async () => {
       const initStartTime = Date.now();
       setConversationStartTime(initStartTime);
-      
-      setModelLoadingProgress("Loading models...");
-      addTimelineEvent("model-loading", "Pipeline", "Initializing chat pipeline", "");
-      
-      pipelineRef.current = new UnifiedPipeline({
 
+      setModelLoadingProgress("Loading models...");
+      addTimelineEvent(
+        "model-loading",
+        "Pipeline",
+        "Initializing chat pipeline",
+        "",
+      );
+
+      pipelineRef.current = new UnifiedPipeline({
         onMessageReceived: (role, content, messageId) => {
           const message: Message = {
             id: messageId || Date.now().toString(),
@@ -83,46 +91,58 @@ export function Chat() {
           if (messageId) {
             messagesRef.current.set(messageId, message);
           }
-          setMessages(prev => {
-            const existing = prev.find(m => m.id === message.id);
+          setMessages((prev) => {
+            const existing = prev.find((m) => m.id === message.id);
             if (existing) {
-              return prev.map(m => m.id === message.id ? message : m);
+              return prev.map((m) => (m.id === message.id ? message : m));
             }
             return [...prev, message];
           });
         },
-        
+
         onMessageUpdated: (messageId, newContent) => {
-          setMessages(prev => prev.map(msg => {
-            if (msg.id === messageId) {
-              const currentContent = msg.processedContent || msg.content;
-              return {
-                ...msg,
-                processedContent: currentContent + " " + newContent
-              };
-            }
-            return msg;
-          }));
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id === messageId) {
+                const currentContent = msg.processedContent || msg.content;
+                return {
+                  ...msg,
+                  processedContent: currentContent + " " + newContent,
+                };
+              }
+              return msg;
+            }),
+          );
         },
-        
+
         onTranscriptionReceived: (text) => {
-          addTimelineEvent("transcription", "Whisper", "Transcribed speech", text);
+          addTimelineEvent(
+            "transcription",
+            "Whisper",
+            "Transcribed speech",
+            text,
+          );
         },
-        
+
         onStatusChange: (status, message) => {
           setModelLoadingProgress(message);
-          if (status === 'ready') {
+          if (status === "ready") {
             setModelLoading(false);
             setModelLoadingProgress("");
-          } else if (status === 'recording_start') {
+          } else if (status === "recording_start") {
             setIsListening(true);
-          } else if (status === 'recording_end') {
+          } else if (status === "recording_end") {
             setIsListening(false);
           }
         },
-        
+
         onTimelineEvent: (type, model, message, content) => {
-          addTimelineEvent(type as TimelineEvent["type"], model as TimelineEvent["model"], message, content || "");
+          addTimelineEvent(
+            type as TimelineEvent["type"],
+            model as TimelineEvent["model"],
+            message,
+            content || "",
+          );
         },
       });
 
@@ -130,14 +150,24 @@ export function Chat() {
         await pipelineRef.current.initialize(mode);
         const voices = pipelineRef.current.getVoices();
         setAvailableVoices(voices);
-        
+
         const initEndTime = Date.now();
         const loadTime = ((initEndTime - initStartTime) / 1000).toFixed(2);
-        addTimelineEvent("model-ready", "Pipeline", `Models loaded in ${loadTime}s`, "");
+        addTimelineEvent(
+          "model-ready",
+          "Pipeline",
+          `Models loaded in ${loadTime}s`,
+          "",
+        );
       } catch (error) {
         console.error("Failed to initialize pipeline:", error);
         setModelLoadingProgress("Failed to load models");
-        addTimelineEvent("error", "Pipeline", "Failed to initialize", error?.toString() || "");
+        addTimelineEvent(
+          "error",
+          "Pipeline",
+          "Failed to initialize",
+          error?.toString() || "",
+        );
       }
     };
 
@@ -152,19 +182,29 @@ export function Chat() {
 
   const handleModeChange = async (newMode: AppMode) => {
     if (!pipelineRef.current || newMode === mode) return;
-    
+
     setModelLoading(true);
     setModelLoadingProgress(`Switching to ${newMode} mode...`);
-    
+
     try {
       await pipelineRef.current.switchMode(newMode);
       setMode(newMode);
       const voices = pipelineRef.current.getVoices();
       setAvailableVoices(voices);
-      addTimelineEvent("mode-switch", "Pipeline", `Switched to ${newMode} mode`, "");
+      addTimelineEvent(
+        "mode-switch",
+        "Pipeline",
+        `Switched to ${newMode} mode`,
+        "",
+      );
     } catch (error) {
       console.error("Failed to switch mode:", error);
-      addTimelineEvent("error", "Pipeline", "Failed to switch mode", error?.toString() || "");
+      addTimelineEvent(
+        "error",
+        "Pipeline",
+        "Failed to switch mode",
+        error?.toString() || "",
+      );
     } finally {
       setModelLoading(false);
       setModelLoadingProgress("");
@@ -173,28 +213,33 @@ export function Chat() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || modelLoading || !pipelineRef.current) return;
-    
+    if (!input.trim() || isLoading || modelLoading || !pipelineRef.current)
+      return;
+
     const currentInput = input;
     setInput("");
     setIsLoading(true);
-    
+
     // clear timeline
     if (messages.length === 0) {
       setTimelineEvents([]);
       setConversationStartTime(Date.now());
     }
-    
+
     try {
       await pipelineRef.current.processText(currentInput);
     } catch (error) {
       console.error("Text processing error:", error);
-      addTimelineEvent("error", "System", "Processing failed", error?.toString() || "");
+      addTimelineEvent(
+        "error",
+        "System",
+        "Processing failed",
+        error?.toString() || "",
+      );
     } finally {
       setIsLoading(false);
     }
   };
-
 
   const clearChat = () => {
     setMessages([]);
@@ -211,43 +256,42 @@ export function Chat() {
 
   return (
     <div className="flex h-full w-full overflow-hidden">
-
-      <Timeline 
-        events={timelineEvents} 
+      <Timeline
+        events={timelineEvents}
         conversationStartTime={conversationStartTime}
         mode={mode}
       />
-      
-      <div className="flex-1 flex flex-col min-w-0">
 
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Chat Header */}
         <div className="bg-card border-b px-6 py-3 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <ModeSwitcher 
+              <ModeSwitcher
                 currentMode={mode}
                 onModeChange={handleModeChange}
                 disabled={modelLoading || isLoading}
               />
-              
-              {mode === 'voice' && Object.keys(availableVoices).length > 0 && (
+
+              {mode === "voice" && Object.keys(availableVoices).length > 0 && (
                 <select
                   value={selectedVoice}
                   onChange={(e) => setSelectedVoice(e.target.value)}
                   className="text-sm px-2 py-1 border rounded-md bg-background"
                   disabled={modelLoading}
                 >
-                  {Object.entries(availableVoices).map(([id, voice]: [string, any]) => (
-                    <option key={id} value={id}>
-                      {voice.name || id}
-                    </option>
-                  ))}
+                  {Object.entries(availableVoices).map(
+                    ([id, voice]: [string, any]) => (
+                      <option key={id} value={id}>
+                        {voice.name || id}
+                      </option>
+                    ),
+                  )}
                 </select>
               )}
             </div>
-            
-            <div className="flex items-center gap-2">
 
+            <div className="flex items-center gap-2">
               <Button
                 onClick={clearChat}
                 variant="outline"
@@ -256,15 +300,16 @@ export function Chat() {
               >
                 Clear Chat
               </Button>
-              
-              <ThemeToggle />
 
+              <ThemeToggle />
             </div>
           </div>
-          
+
           {/* Status Bar */}
           <div className="mt-2 text-sm text-muted-foreground flex items-center gap-2">
-            {modelLoading ? ( modelLoadingProgress || "Loading models...") : mode === 'text' ? (
+            {modelLoading ? (
+              modelLoadingProgress || "Loading models..."
+            ) : mode === "text" ? (
               ""
             ) : (
               <>
@@ -286,9 +331,11 @@ export function Chat() {
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground">
               <Bot className="h-16 w-16 mb-4 opacity-20" />
-              <h2 className="text-xl font-medium mb-2">Welcome to the Conversational Filler</h2>
+              <h2 className="text-xl font-medium mb-2">
+                Welcome to the Conversational Filler
+              </h2>
               <p className="text-sm max-w-md">
-                {mode === 'text' 
+                {mode === "text"
                   ? "Type a message below to start chatting with SmolLM, enhanced by OpenAI for context."
                   : "Just start speaking! I'm listening and will respond with voice."}
               </p>
@@ -302,21 +349,34 @@ export function Chat() {
           )}
 
           <div className="space-y-4">
-
             {messages.map((message) => (
               <div
                 key={message.id}
                 className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
               >
-                <div className={`flex gap-3 max-w-[70%] ${message.role === "user" ? "flex-row-reverse" : ""}`}>
-                  <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-                    message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
-                  }`}>
-                    {message.role === "user" ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                <div
+                  className={`flex gap-3 max-w-[70%] ${message.role === "user" ? "flex-row-reverse" : ""}`}
+                >
+                  <div
+                    className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted"
+                    }`}
+                  >
+                    {message.role === "user" ? (
+                      <User className="h-4 w-4" />
+                    ) : (
+                      <Bot className="h-4 w-4" />
+                    )}
                   </div>
-                  <div className={`px-4 py-2 rounded-lg ${
-                    message.role === "user" ? "bg-primary text-primary-foreground" : "bg-muted"
-                  }`}>
+                  <div
+                    className={`px-4 py-2 rounded-lg ${
+                      message.role === "user"
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted"
+                    }`}
+                  >
                     <p className="text-sm whitespace-pre-wrap">
                       {message.processedContent || message.content}
                     </p>
@@ -337,9 +397,8 @@ export function Chat() {
                 </div>
               </div>
             )}
-
           </div>
-          
+
           <div ref={messagesEndRef} />
         </div>
 
@@ -351,11 +410,11 @@ export function Chat() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder={
-                modelLoading 
-                  ? "Waiting for models to load..." 
-                  : mode === 'voice'
-                  ? "Type a message or use voice recording..."
-                  : "Type your message..."
+                modelLoading
+                  ? "Waiting for models to load..."
+                  : mode === "voice"
+                    ? "Type a message or use voice recording..."
+                    : "Type your message..."
               }
               className="flex-1 px-4 py-2 border rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={isLoading || modelLoading}

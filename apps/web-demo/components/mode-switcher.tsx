@@ -2,10 +2,13 @@
 
 import { Button } from "@convo-filler/ui/components/button";
 import { MessageSquare, Mic } from "lucide-react";
+import { AppMode } from "../app/lib/unified-pipeline";
 
-export type AppMode = 'text' | 'voice';
-
-export function ModeSwitcher({ currentMode, onModeChange, disabled }: {
+export function ModeSwitcher({
+  currentMode,
+  onModeChange,
+  disabled,
+}: {
   currentMode: AppMode;
   onModeChange: (mode: AppMode) => void;
   disabled?: boolean;

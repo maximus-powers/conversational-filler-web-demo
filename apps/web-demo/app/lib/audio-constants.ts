@@ -20,7 +20,7 @@ export const EXIT_THRESHOLD = 0.1;
  * After each speech chunk, wait for at least this amount of silence
  * before considering the next chunk as a new speech chunk
  */
-export const MIN_SILENCE_DURATION_MS = 400;
+export const MIN_SILENCE_DURATION_MS = 1000;
 export const MIN_SILENCE_DURATION_SAMPLES =
   MIN_SILENCE_DURATION_MS * INPUT_SAMPLE_RATE_MS;
 

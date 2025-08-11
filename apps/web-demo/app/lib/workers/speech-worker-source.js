@@ -6,12 +6,12 @@ console.log('KokoroTTS imported:', typeof KokoroTTS, 'TextSplitterStream:', type
 // wrap everything in async IIFE to handle top-level await
 (async () => {
 
-// Audio constants - matching webgpu-demo exactly
+// Audio constants (also defined in ../audio-constants.ts)
 const INPUT_SAMPLE_RATE = 16000;
 const INPUT_SAMPLE_RATE_MS = INPUT_SAMPLE_RATE / 1000;
 const SPEECH_THRESHOLD = 0.3;
 const EXIT_THRESHOLD = 0.1;
-const MIN_SILENCE_DURATION_MS = 1000; // Increased from 400ms to 1 second for more lenient pause detection
+const MIN_SILENCE_DURATION_MS = 1000; 
 const MIN_SILENCE_DURATION_SAMPLES = MIN_SILENCE_DURATION_MS * INPUT_SAMPLE_RATE_MS;
 const SPEECH_PAD_MS = 80;
 const SPEECH_PAD_SAMPLES = SPEECH_PAD_MS * INPUT_SAMPLE_RATE_MS;
@@ -29,49 +29,42 @@ self.postMessage({
   duration: "until_next",
 });
 
-// Initialize TTS
+// init TTS
 const model_id = "onnx-community/Kokoro-82M-v1.0-ONNX";
-let voice; // Will be set later or use default
+let voice;
 let tts;
 
 try {
   console.log('Initializing TTS with model:', model_id);
-  
-  // Check if WebGPU is available in worker
-  const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator;
-  console.log('WebGPU available in worker:', hasWebGPU);
-  
-  // Try with wasm if webgpu isn't available
-  const ttsDevice = hasWebGPU ? "webgpu" : "wasm";
-  console.log('Using device for TTS:', ttsDevice);
+  const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator; 
+  const ttsDevice = hasWebGPU ? "webgpu" : "wasm"; // fallback to wasm if webgpu doens't work
   
   tts = await KokoroTTS.from_pretrained(model_id, {
     dtype: "fp32",
     device: ttsDevice,
   });
-  console.log('TTS initialized successfully');
-  console.log('Available voices:', tts.voices ? Object.keys(tts.voices) : 'No voices found');
-  
-  
+  console.log('TTS initialized successfully');  
 } catch (error) {
   console.error('Failed to initialize TTS:', error);
   self.postMessage({ type: "error", error: `TTS initialization failed: ${error.message}` });
 }
 
-// Load VAD model
+// init VAD
+console.log('Initializing VAD');
 const silero_vad = await AutoModel.from_pretrained(
   "onnx-community/silero-vad",
   {
     config: { model_type: "custom" },
-    dtype: "fp32", // Full-precision
+    dtype: "fp32", 
   },
 ).catch((error) => {
   self.postMessage({ error });
   throw error;
 });
+console.log('VAD initialized successfully');
 
-// Load Whisper for transcription
-// Use whisper-small for better accuracy (244M params vs 74M in base)
+
+// init STT
 const DEVICE_DTYPE_CONFIGS = {
   webgpu: {
     encoder_model: "fp32",
@@ -83,13 +76,12 @@ const DEVICE_DTYPE_CONFIGS = {
   },
 };
 
-console.log('Loading Whisper large v3 turbo model for better accuracy...');
+console.log('Initializing TTS.');
 self.postMessage({ 
   type: "info", 
-  message: "Loading Whisper Large v3 Turbo model (this may take 30-60 seconds)...",
+  message: "Loading Whisper TTS...",
   duration: "until_next"
 });
-
 const transcriber = await pipeline(
   "automatic-speech-recognition",
   "onnx-community/whisper-base",
@@ -101,31 +93,25 @@ const transcriber = await pipeline(
   self.postMessage({ error });
   throw error;
 });
-
+await transcriber(new Float32Array(INPUT_SAMPLE_RATE));
+console.log('TTS Initializaed.');
 self.postMessage({ 
   type: "info", 
   message: "Whisper model loaded successfully"
 });
 
-await transcriber(new Float32Array(INPUT_SAMPLE_RATE)); // Compile shaders
-
-// Load SmolLM for conversation (OUR MODEL)
+console.log('Initializing SmolLM.');
 const llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
 const llm = await pipeline("text-generation", llm_model_id, {
   dtype: "fp32", 
   device: "webgpu",
 });
-
 await llm("test", { max_new_tokens: 1 }); // Compile shaders
-
 let messages = [];
-
-// Set default voice if not already set
 if (!voice && tts.voices) {
   voice = Object.keys(tts.voices)[0] || "af_heart";
-  console.log('Setting default voice:', voice);
 }
-
+console.log('SmolLM initialized successfully.');
 self.postMessage({
   type: "status",
   status: "ready",
@@ -133,45 +119,30 @@ self.postMessage({
   voices: tts.voices,
 });
 
-// Global audio buffer to store incoming audio - EXACTLY LIKE WEBGPU-DEMO
+// Global audio buffer to store incoming audio
 const BUFFER = new Float32Array(MAX_BUFFER_DURATION * INPUT_SAMPLE_RATE);
 let bufferPointer = 0;
 
-// Initial state for VAD - EXACTLY LIKE WEBGPU-DEMO
+// Initial state for VAD
 const sr = new Tensor("int64", [INPUT_SAMPLE_RATE], []);
 let state = new Tensor("float32", new Float32Array(2 * 1 * 128), [2, 1, 128]);
 
-// Whether we are in the process of adding audio to the buffer
+
+
 let isRecording = false;
 let isPlaying = false;
 
-/**
- * Perform Voice Activity Detection (VAD) - EXACTLY FROM WEBGPU-DEMO
- * @param {Float32Array} buffer The new audio buffer
- * @returns {Promise<boolean>} `true` if the buffer is speech, `false` otherwise.
- */
 async function vad(buffer) {
   const input = new Tensor("float32", buffer, [1, buffer.length]);
-
   const { stateN, output } = await silero_vad({ input, sr, state });
-  state = stateN; // Update state
-
+  state = stateN; 
   const isSpeech = output.data[0];
-
-  // Use heuristics to determine if the buffer is speech or not
   return (
-    // Case 1: We are above the threshold (definitely speech)
-    isSpeech > SPEECH_THRESHOLD ||
-    // Case 2: We are in the process of recording, and the probability is above the negative (exit) threshold
-    (isRecording && isSpeech >= EXIT_THRESHOLD)
+    isSpeech > SPEECH_THRESHOLD || (isRecording && isSpeech >= EXIT_THRESHOLD)
   );
 }
 
-/**
- * Generate and process thoughts from OpenAI - streaming version
- */
 const generateAndProcessThoughts = async (conversationHistory, userInput, immediateResponse, splitter) => {
-  // Use our Next.js API endpoint
   const response = await fetch('/api/chat-thoughts', {
     method: 'POST',
     headers: {
@@ -187,7 +158,6 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
     return [];
   }
 
-  // Stream thoughts as they arrive
   const reader = response.body?.getReader();
   if (!reader) return [];
 
@@ -203,7 +173,7 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
     const chunk = decoder.decode(value, { stream: true });
     buffer += chunk;
 
-    // Extract thoughts from buffer with [bt] and [et] markers
+    // extract thoughts from buffer with [bt] and [et] markers
     let startIndex = buffer.indexOf('[bt]');
     while (startIndex !== -1) {
       const endIndex = buffer.indexOf('[et]', startIndex);
@@ -212,10 +182,8 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
         if (thought && !thoughts.includes(thought)) {
           thoughts.push(thought);
           
-          // Send thought immediately as it's found
           self.postMessage({ type: "thought", thought, index: thoughtIndex++ });
           
-          // Process this thought immediately to generate enhanced response
           let contextPrompt = `<|im_start|>user\n${userInput}<|im_end|>\n`;
           if (immediateResponse) {
             contextPrompt += `<|im_start|>assistant\n${immediateResponse}<|im_end|>\n`;
@@ -227,9 +195,6 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
             temperature: 1,
             do_sample: false,
             return_full_text: false,
-            repetition_penalty: 1.2,
-            top_p: 0.9,
-            top_k: 50,
             pad_token_id: 2,
             eos_token_id: 2,
           });
@@ -249,26 +214,20 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
             .trim();
 
           if (response) {
-            // Send enhanced response message regardless of TTS
             self.postMessage({ type: "enhanced_response", response });
-            
-            // Add to TTS stream if available
-            if (splitter) {
-              console.log('Pushing enhanced response to TTS splitter:', response);
+            if (splitter) { // add to TTS if available
               splitter.push(" " + response);
             }
           }
         }
-        // Remove processed thought from buffer
+        // rm processed thought from buffer
         buffer = buffer.substring(endIndex + 4);
         startIndex = buffer.indexOf('[bt]');
       } else {
-        // No complete thought yet, wait for more chunks
         break;
       }
     }
 
-    // Check for [done] token
     if (buffer.includes('[done]')) {
       break;
     }
@@ -277,40 +236,31 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
   return thoughts;
 };
 
-// processThoughts function removed - now integrated into generateAndProcessThoughts
-
-/**
- * Transcribe the audio buffer and generate responses - FOLLOWING WEBGPU-DEMO
- * @param {Float32Array} buffer The audio buffer
- */
 const speechToSpeech = async (buffer) => {
   isPlaying = true;
 
-  // 1. Transcribe the audio from the user
+  // transcribe
   const text = await transcriber(buffer).then(({ text }) => text.trim());
   if (["", "[BLANK_AUDIO]"].includes(text)) {
-    // If the transcription is empty or a blank audio, we skip the rest of the processing
     isPlaying = false;
     return;
   }
   messages.push({ role: "user", content: text });
   self.postMessage({ type: "transcription", text });
 
-  // Set up text-to-speech streaming
   if (!tts) {
     console.error('TTS not initialized, cannot speak response');
     return;
   }
   
   const splitter = new TextSplitterStream();
-  console.log('Creating TTS stream with voice:', voice, 'TTS object:', tts);
   
-  // Create stream - note: don't pass voice if it's undefined
+  // create stream - note: don't pass voice if it's undefined
   const streamOptions = voice ? { voice } : {};
   const stream = tts.stream(splitter, streamOptions);
   console.log('TTS stream created successfully with options:', streamOptions);
   
-  // Start TTS processing in background
+  // start TTS processing
   (async () => {
     let chunkCount = 0;
     self.postMessage({ type: "tts_start", text: "Starting TTS" });
@@ -320,50 +270,34 @@ const speechToSpeech = async (buffer) => {
         chunkCount++;
         console.log(`TTS chunk ${chunkCount}:`, chunk);
         
-        // Extract audio from RawAudio object
         let audioData;
         const text = chunk.text || chunk.content || '';
         
         if (chunk.audio) {
-          // Check if it's a RawAudio object with nested audio property
           if (chunk.audio.audio && chunk.audio.audio instanceof Float32Array) {
             audioData = chunk.audio.audio;
-            console.log(`  - Extracted audio from RawAudio object, length=${audioData.length}, sample_rate=${chunk.audio.sampling_rate}`);
           } else if (chunk.audio instanceof Float32Array) {
             audioData = chunk.audio;
-            console.log(`  - Audio is direct Float32Array, length=${audioData.length}`);
-          } else {
-            console.log(`  - Unknown audio format:`, chunk.audio);
           }
         }
-        
-        console.log(`  - text="${text}", audio extracted=${!!audioData}, audio length=${audioData?.length}`);
-        
+                
         if (audioData && audioData.length > 0) {
-          // Don't resample - let the audio context handle the sample rate
-          // The play-worklet will play at the correct rate
-          console.log(`  - Sending audio at original sample rate: ${chunk.audio.sampling_rate || 'unknown'}Hz`);
           self.postMessage({ type: "output", text: text, result: audioData });
         }
       }
     } catch (error) {
       console.error('Error in TTS stream:', error);
     }
-    
-    console.log('TTS stream completed, total chunks:', chunkCount);
     self.postMessage({ type: "tts_end", text: "TTS complete" });
   })();
 
-  // 2. Generate immediate response using the SmolLM conversation filler model
+  // generate immediate response using smollm
   const simplePrompt = `User: ${text}\nAssistant:`;
-  
   const immediateResult = await llm(simplePrompt, {
     max_new_tokens: 25,
-    temperature: 0.7,
+    temperature: 1,
     do_sample: true,
     return_full_text: false,
-    repetition_penalty: 1.1,
-    top_p: 0.9,
   });
 
   let immediateResponse = "";
@@ -373,7 +307,6 @@ const speechToSpeech = async (buffer) => {
     immediateResponse = immediateResult.generated_text;
   }
 
-  // Clean up the response
   immediateResponse = immediateResponse
     .replace(/User:.*$/gi, "")
     .replace(/Assistant:\s*/gi, "")
@@ -382,12 +315,10 @@ const speechToSpeech = async (buffer) => {
 
   if (immediateResponse) {
     messages.push({ role: "assistant", content: immediateResponse });
-    console.log('Pushing immediate response to TTS splitter:', immediateResponse);
     
-    // Push text to TTS
+    // push text to TTS
     try {
       splitter.push(immediateResponse);
-      console.log('Text pushed to splitter successfully:', immediateResponse);
     } catch (error) {
       console.error('Error pushing text to splitter:', error);
     }
@@ -395,19 +326,17 @@ const speechToSpeech = async (buffer) => {
     self.postMessage({ type: "immediate_response", response: immediateResponse });
   }
 
-  // 3. Generate and process thoughts as they stream in
+  // generate and process thoughts as they stream in
   try {
     await generateAndProcessThoughts(messages, text, immediateResponse, splitter);
   } catch (error) {
     console.warn("Failed to generate thoughts:", error);
   }
 
-  // Finally, close the stream to signal that no more text will be added.
   splitter.close();
-  // Don't set isPlaying = false here, wait for playback_ended message
 };
 
-// Track the number of samples after the last speech chunk - EXACTLY FROM WEBGPU-DEMO
+// track number of speech samples after the last speech segment
 let postSpeechSamples = 0;
 const resetAfterRecording = (offset = 0) => {
   self.postMessage({
@@ -423,15 +352,9 @@ const resetAfterRecording = (offset = 0) => {
 };
 
 const dispatchForTranscriptionAndResetAudioBuffer = (overflow) => {
-  // Get start and end time of the speech segment, minus the padding
-  const now = Date.now();
-  const end =
-    now - ((postSpeechSamples + SPEECH_PAD_SAMPLES) / INPUT_SAMPLE_RATE) * 1000;
-  const start = end - (bufferPointer / INPUT_SAMPLE_RATE) * 1000;
-  const duration = end - start;
   const overflowLength = overflow?.length ?? 0;
 
-  // Send the audio buffer to the worker
+  // send the audio buffer to the worker
   const buffer = BUFFER.slice(0, bufferPointer + SPEECH_PAD_SAMPLES);
 
   const prevLength = prevBuffers.reduce((acc, b) => acc + b.length, 0);
@@ -444,30 +367,28 @@ const dispatchForTranscriptionAndResetAudioBuffer = (overflow) => {
   paddedBuffer.set(buffer, offset);
   speechToSpeech(paddedBuffer);
 
-  // Set overflow (if present) and reset the rest of the audio buffer
+  // set overflow (if present) and reset the rest of the audio buffer
   if (overflow) {
     BUFFER.set(overflow, 0);
   }
   resetAfterRecording(overflowLength);
 };
 
-// Previous buffers FIFO queue - EXACTLY FROM WEBGPU-DEMO
+// prev buffers FIFO queue
 let prevBuffers = [];
 
-// For text mode processing
+
 async function processTextMode(text, enableTTS = false) {
   isPlaying = true;
   messages.push({ role: "user", content: text });
   
-  // Generate immediate response
+  // generate immediate response
   const simplePrompt = `User: ${text}\nAssistant:`;
   const immediateResult = await llm(simplePrompt, {
     max_new_tokens: 25,
-    temperature: 0.7,
+    temperature: 1,
     do_sample: true,
     return_full_text: false,
-    repetition_penalty: 1.1,
-    top_p: 0.9,
   });
 
   let immediateResponse = "";
@@ -497,7 +418,6 @@ async function processTextMode(text, enableTTS = false) {
       })();
       splitter.push(immediateResponse);
       
-      // Generate and speak thoughts
       try {
         await generateAndProcessThoughts(messages, text, immediateResponse, splitter);
       } catch (error) {
@@ -506,7 +426,7 @@ async function processTextMode(text, enableTTS = false) {
       
       splitter.close();
     } else {
-      // Just generate thoughts without TTS
+      // generate thoughts without tts
       try {
         await generateAndProcessThoughts(messages, text, immediateResponse, null);
       } catch (error) {
@@ -518,7 +438,7 @@ async function processTextMode(text, enableTTS = false) {
   isPlaying = false;
 }
 
-// Message handler - FOLLOWING WEBGPU-DEMO STRUCTURE
+// message handler
 self.onmessage = async (event) => {
   const { type } = event.data;
 
@@ -527,7 +447,6 @@ self.onmessage = async (event) => {
 
   switch (type) {
     case "init":
-      // Already initialized
       self.postMessage({ 
         type: "status", 
         status: "ready", 
@@ -545,7 +464,7 @@ self.onmessage = async (event) => {
       return;
       
     case "process_text":
-      // For text mode
+      // for text mode
       const text = event.data.text;
       const enableTTS = event.data.enableTTS || false;
       if (text) {
@@ -558,21 +477,15 @@ self.onmessage = async (event) => {
       return;
   }
 
-  // Audio processing - EXACTLY FROM WEBGPU-DEMO
-  // The vad-processor sends { type: 'audio', audio: Float32Array }
-  // The unified-pipeline forwards as { type: 'audio', buffer: Float32Array }
+  // audio processing
   const buffer = event.data.buffer || event.data.audio;
   if (type !== "audio" || !buffer) return;
   
-  const wasRecording = isRecording; // Save current state
+  const wasRecording = isRecording;
   const isSpeech = await vad(buffer);
 
   if (!wasRecording && !isSpeech) {
-    // We are not recording, and the buffer is not speech,
-    // so we will probably discard the buffer. So, we insert
-    // into a FIFO queue with maximum size of MAX_NUM_PREV_BUFFERS
     if (prevBuffers.length >= MAX_NUM_PREV_BUFFERS) {
-      // If the queue is full, we discard the oldest buffer
       prevBuffers.shift();
     }
     prevBuffers.push(buffer);
@@ -581,25 +494,18 @@ self.onmessage = async (event) => {
 
   const remaining = BUFFER.length - bufferPointer;
   if (buffer.length >= remaining) {
-    // The buffer is larger than (or equal to) the remaining space in the global buffer,
-    // so we perform transcription and copy the overflow to the global buffer
     BUFFER.set(buffer.subarray(0, remaining), bufferPointer);
     bufferPointer += remaining;
-
-    // Dispatch the audio buffer
     const overflow = buffer.subarray(remaining);
     dispatchForTranscriptionAndResetAudioBuffer(overflow);
     return;
   } else {
-    // The buffer is smaller than the remaining space in the global buffer,
-    // so we copy it to the global buffer
     BUFFER.set(buffer, bufferPointer);
     bufferPointer += buffer.length;
   }
 
   if (isSpeech) {
     if (!isRecording) {
-      // Indicate start of recording
       self.postMessage({
         type: "status",
         status: "recording_start",
@@ -607,25 +513,18 @@ self.onmessage = async (event) => {
         duration: "until_next",
       });
     }
-    // Start or continue recording
     isRecording = true;
-    postSpeechSamples = 0; // Reset the post-speech samples
+    postSpeechSamples = 0; 
     return;
   }
 
   postSpeechSamples += buffer.length;
 
-  // At this point we're confident that we were recording (wasRecording === true), but the latest buffer is not speech.
-  // So, we check whether we have reached the end of the current audio chunk.
   if (postSpeechSamples < MIN_SILENCE_DURATION_SAMPLES) {
-    // There was a short pause, but not long enough to consider the end of a speech chunk
-    // (e.g., the speaker took a breath), so we continue recording
     return;
   }
 
   if (bufferPointer < MIN_SPEECH_DURATION_SAMPLES) {
-    // The entire buffer (including the new chunk) is smaller than the minimum
-    // duration of a speech chunk, so we can safely discard the buffer.
     resetAfterRecording();
     return;
   }
