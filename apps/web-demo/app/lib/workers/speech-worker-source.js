@@ -132,6 +132,10 @@ let state = new Tensor("float32", new Float32Array(2 * 1 * 128), [2, 1, 128]);
 let isRecording = false;
 let isPlaying = false;
 
+// Silence token tracking
+let silenceTimer = null;
+let isGeneratingSilence = false;
+
 async function vad(buffer) {
   const input = new Tensor("float32", buffer, [1, buffer.length]);
   const { stateN, output } = await silero_vad({ input, sr, state });
@@ -142,7 +146,32 @@ async function vad(buffer) {
   );
 }
 
+function startSilenceTimer(splitter) {
+  if (silenceTimer) {
+    clearTimeout(silenceTimer);
+  }
+  
+  silenceTimer = setTimeout(() => {
+    if (!isGeneratingSilence && splitter) {
+      isGeneratingSilence = true;
+      splitter.push("<sil>");
+      self.postMessage({ type: "silence_token", token: "<sil>" });
+    }
+  }, 1000); // 1 second delay
+}
+
+function clearSilenceTimer() {
+  if (silenceTimer) {
+    clearTimeout(silenceTimer);
+    silenceTimer = null;
+  }
+  isGeneratingSilence = false;
+}
+
 const generateAndProcessThoughts = async (conversationHistory, userInput, immediateResponse, splitter) => {
+  // Clear any existing silence timer since we're starting thought processing
+  clearSilenceTimer();
+  
   const response = await fetch('/api/chat-thoughts', {
     method: 'POST',
     headers: {
@@ -155,11 +184,21 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
 
   if (!response.ok) {
     console.warn('Failed to get thoughts from OpenAI');
+    // Start silence timer if no thoughts available
+    if (splitter) {
+      startSilenceTimer(splitter);
+    }
     return [];
   }
 
   const reader = response.body?.getReader();
-  if (!reader) return [];
+  if (!reader) {
+    // Start silence timer if no thoughts available
+    if (splitter) {
+      startSilenceTimer(splitter);
+    }
+    return [];
+  }
 
   const decoder = new TextDecoder();
   let buffer = '';
@@ -181,6 +220,9 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
         const thought = buffer.substring(startIndex + 4, endIndex).trim();
         if (thought && !thoughts.includes(thought)) {
           thoughts.push(thought);
+          
+          // Reset silence timer since we received a new thought
+          clearSilenceTimer();
           
           self.postMessage({ type: "thought", thought, index: thoughtIndex++ });
           
@@ -233,11 +275,23 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
     }
   }
 
+  // Start silence timer after all thoughts have been processed
+  if (splitter && thoughts.length === 0) {
+    // No thoughts were generated, start silence timer
+    startSilenceTimer(splitter);
+  } else if (splitter) {
+    // Thoughts were generated, start timer for potential silence after them
+    startSilenceTimer(splitter);
+  }
+
   return thoughts;
 };
 
 const speechToSpeech = async (buffer) => {
   isPlaying = true;
+  
+  // Clear any existing silence timer when starting new speech processing
+  clearSilenceTimer();
 
   // transcribe
   const text = await transcriber(buffer).then(({ text }) => text.trim());
@@ -380,6 +434,10 @@ let prevBuffers = [];
 
 async function processTextMode(text, enableTTS = false) {
   isPlaying = true;
+  
+  // Clear any existing silence timer when starting text processing
+  clearSilenceTimer();
+  
   messages.push({ role: "user", content: text });
   
   // generate immediate response
@@ -461,6 +519,7 @@ self.onmessage = async (event) => {
       
     case "playback_ended":
       isPlaying = false;
+      clearSilenceTimer(); // Clear silence timer when playback ends
       return;
       
     case "process_text":
@@ -474,6 +533,7 @@ self.onmessage = async (event) => {
       
     case "end_call":
       messages = [];
+      clearSilenceTimer(); // Clear silence timer when ending call
       return;
   }
 
