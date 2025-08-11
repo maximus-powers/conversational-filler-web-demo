@@ -1,19 +1,9 @@
-// Worker implementation following webgpu-demo structure exactly
-// Only differences: using our LLM model and OpenAI API endpoint
-
-import {
-  // VAD
-  AutoModel,
-  
-  // Speech recognition  
-  Tensor,
-  pipeline,
-} from "@huggingface/transformers";
+import { AutoModel, Tensor, pipeline } from "@huggingface/transformers";
 
 import { KokoroTTS, TextSplitterStream } from "kokoro-js";
 console.log('KokoroTTS imported:', typeof KokoroTTS, 'TextSplitterStream:', typeof TextSplitterStream);
 
-// Wrap everything in async IIFE to handle top-level await
+// wrap everything in async IIFE to handle top-level await
 (async () => {
 
 // Audio constants - matching webgpu-demo exactly

@@ -35,7 +35,6 @@ export function Chat() {
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
-
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
@@ -63,16 +62,17 @@ export function Chat() {
     setConversationStartTime(null);
   };
 
-  // Initialize pipeline
+  // init pipeline
   useEffect(() => {
     const initializePipeline = async () => {
       const initStartTime = Date.now();
       setConversationStartTime(initStartTime);
       
       setModelLoadingProgress("Loading models...");
-      addTimelineEvent("model-loading", "Pipeline", "Initializing unified pipeline", "");
+      addTimelineEvent("model-loading", "Pipeline", "Initializing chat pipeline", "");
       
       pipelineRef.current = new UnifiedPipeline({
+
         onMessageReceived: (role, content, messageId) => {
           const message: Message = {
             id: messageId || Date.now().toString(),
@@ -80,11 +80,9 @@ export function Chat() {
             content,
             processedContent: content,
           };
-          
           if (messageId) {
             messagesRef.current.set(messageId, message);
           }
-          
           setMessages(prev => {
             const existing = prev.find(m => m.id === message.id);
             if (existing) {
@@ -107,12 +105,8 @@ export function Chat() {
           }));
         },
         
-        onThoughtReceived: (thought, index) => {
-          // Timeline event is already added in unified-pipeline
-        },
-        
         onTranscriptionReceived: (text) => {
-          addTimelineEvent("whisper-transcription", "Whisper", "Transcribed speech", text);
+          addTimelineEvent("transcription", "Whisper", "Transcribed speech", text);
         },
         
         onStatusChange: (status, message) => {
@@ -167,10 +161,10 @@ export function Chat() {
       setMode(newMode);
       const voices = pipelineRef.current.getVoices();
       setAvailableVoices(voices);
-      addTimelineEvent("mode-switch", "System", `Switched to ${newMode} mode`, "");
+      addTimelineEvent("mode-switch", "Pipeline", `Switched to ${newMode} mode`, "");
     } catch (error) {
       console.error("Failed to switch mode:", error);
-      addTimelineEvent("error", "System", "Failed to switch mode", error?.toString() || "");
+      addTimelineEvent("error", "Pipeline", "Failed to switch mode", error?.toString() || "");
     } finally {
       setModelLoading(false);
       setModelLoadingProgress("");
@@ -185,7 +179,7 @@ export function Chat() {
     setInput("");
     setIsLoading(true);
     
-    // Clear timeline for new conversation
+    // clear timeline
     if (messages.length === 0) {
       setTimelineEvents([]);
       setConversationStartTime(Date.now());
@@ -217,16 +211,16 @@ export function Chat() {
 
   return (
     <div className="flex h-full w-full overflow-hidden">
-      {/* Timeline - Left Side */}
+
       <Timeline 
         events={timelineEvents} 
         conversationStartTime={conversationStartTime}
         mode={mode}
       />
       
-      {/* Main Chat Area - Right Side */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Header - Fixed */}
+
+        {/* Chat Header */}
         <div className="bg-card border-b px-6 py-3 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -253,50 +247,50 @@ export function Chat() {
             </div>
             
             <div className="flex items-center gap-2">
+
               <Button
                 onClick={clearChat}
                 variant="outline"
                 size="sm"
                 disabled={messages.length === 0}
               >
-                Clear
+                Clear Chat
               </Button>
               
               <ThemeToggle />
+
             </div>
           </div>
           
           {/* Status Bar */}
           <div className="mt-2 text-sm text-muted-foreground flex items-center gap-2">
-            {modelLoading ? (
-              modelLoadingProgress || "Loading models..."
-            ) : mode === 'text' ? (
-              "Text mode: Type messages to chat with SmolLM enhanced by OpenAI thoughts"
+            {modelLoading ? ( modelLoadingProgress || "Loading models...") : mode === 'text' ? (
+              ""
             ) : (
               <>
                 {isListening ? (
                   <div className="flex items-center gap-2">
-                    <Mic className="h-4 w-4 text-red-500 animate-pulse" />
-                    <span className="text-red-500">Listening...</span>
+                    <Mic className="h-4 w-4 text-green-500 animate-pulse" />
+                    <span className="text-green-500">Listening...</span>
                   </div>
                 ) : (
-                  "Voice mode: Speak naturally and I'll respond with voice"
+                  ""
                 )}
               </>
             )}
           </div>
         </div>
 
-        {/* Messages Area - Scrollable */}
+        {/* Messages */}
         <div className="flex-1 overflow-y-auto px-4 py-3 bg-background">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground">
               <Bot className="h-16 w-16 mb-4 opacity-20" />
-              <h2 className="text-xl font-medium mb-2">Welcome to Conversational Filler</h2>
+              <h2 className="text-xl font-medium mb-2">Welcome to the Conversational Filler</h2>
               <p className="text-sm max-w-md">
                 {mode === 'text' 
-                  ? "Type a message below to start chatting with SmolLM, enhanced by OpenAI's contextual thoughts."
-                  : "Just start speaking! I'm always listening and will respond with voice."}
+                  ? "Type a message below to start chatting with SmolLM, enhanced by OpenAI for context."
+                  : "Just start speaking! I'm listening and will respond with voice."}
               </p>
               {modelLoading && (
                 <div className="mt-6">
@@ -308,6 +302,7 @@ export function Chat() {
           )}
 
           <div className="space-y-4">
+
             {messages.map((message) => (
               <div
                 key={message.id}
@@ -325,14 +320,6 @@ export function Chat() {
                     <p className="text-sm whitespace-pre-wrap">
                       {message.processedContent || message.content}
                     </p>
-                    {message.thoughts && message.thoughts.length > 0 && (
-                      <div className="mt-2 pt-2 border-t border-current opacity-50">
-                        <p className="text-xs font-medium mb-1">OpenAI Thoughts:</p>
-                        {message.thoughts.map((thought, idx) => (
-                          <p key={idx} className="text-xs">• {thought}</p>
-                        ))}
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
@@ -350,12 +337,13 @@ export function Chat() {
                 </div>
               </div>
             )}
+
           </div>
           
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area - Fixed at Bottom */}
+        {/* Input Box */}
         <div className="border-t bg-card px-4 py-3 flex-shrink-0">
           <form onSubmit={handleSubmit} className="flex gap-3">
             <input

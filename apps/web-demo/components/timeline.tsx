@@ -28,7 +28,7 @@ export function Timeline({ events, conversationStartTime, mode }: {
     switch (type) {
       case "smollm-response":
         return <Bot className="h-3 w-3 text-blue-500" />;
-      case "openai-thought":
+      case "thought":
         return <Brain className="h-3 w-3 text-green-500" />;
       case "smollm-enhanced":
         return <Bot className="h-3 w-3 text-blue-500" />;
@@ -39,7 +39,7 @@ export function Timeline({ events, conversationStartTime, mode }: {
         return <DownloadCloud className="h-3 w-3 text-yellow-500" />;
       case "model-ready":
         return <CheckCircle className="h-3 w-3 text-green-600" />;
-      case "whisper-transcription":
+      case "transcription":
         return <Brain className="h-3 w-3 text-purple-500" />;
       case "recording-start":
         return <Mic className="h-3 w-3 text-red-500" />;
@@ -54,7 +54,7 @@ export function Timeline({ events, conversationStartTime, mode }: {
     switch (type) {
       case "smollm-response":
         return "border-blue-500 bg-blue-50 dark:bg-blue-950";
-      case "openai-thought":
+      case "thought":
         return "border-green-500 bg-green-50 dark:bg-green-950";
       case "smollm-enhanced":
         return "border-blue-500 bg-blue-50 dark:bg-blue-950";
@@ -65,7 +65,7 @@ export function Timeline({ events, conversationStartTime, mode }: {
         return "border-yellow-500 bg-yellow-50 dark:bg-yellow-950";
       case "model-ready":
         return "border-green-600 bg-green-50 dark:bg-green-950";
-      case "whisper-transcription":
+      case "transcription":
         return "border-purple-500 bg-purple-50 dark:bg-purple-950";
       case "recording-start":
         return "border-red-500 bg-red-50 dark:bg-red-950";

@@ -64,7 +64,6 @@ ${conversationText}`
       temperature: 1,
     });
 
-    // Stream thoughts as they're found
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
@@ -74,28 +73,24 @@ ${conversationText}`
         for await (const chunk of result.textStream) {
           buffer += chunk;
           
-          // Check for complete thoughts in the buffer
+          // parse thoughts
           let startIndex = buffer.indexOf('[bt]');
           while (startIndex !== -1) {
             const endIndex = buffer.indexOf('[et]', startIndex);
             if (endIndex !== -1) {
-              // Found a complete thought
               const thought = buffer.substring(startIndex + 4, endIndex).trim();
               if (thought && !thoughts.includes(thought)) {
                 thoughts.push(thought);
-                // Send this thought immediately
                 controller.enqueue(encoder.encode(`[bt]${thought}[et]`));
               }
-              // Remove processed thought from buffer
               buffer = buffer.substring(endIndex + 4);
               startIndex = buffer.indexOf('[bt]');
             } else {
-              // No complete thought yet, wait for more chunks
+              // no complete thought yet
               break;
             }
           }
           
-          // Check for [done] token
           if (buffer.includes('[done]')) {
             controller.enqueue(encoder.encode('[done]'));
             break;

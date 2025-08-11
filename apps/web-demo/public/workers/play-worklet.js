@@ -52,13 +52,11 @@ class BufferedAudioWorkletProcessor extends AudioWorkletProcessor {
         this.currentChunkOffset += samplesToCopy;
         outputIndex += samplesToCopy;
 
-        // Remove the chunk if fully consumed.
         if (this.currentChunkOffset >= currentChunk.length) {
           this.bufferQueue.shift();
           this.currentChunkOffset = 0;
         }
       } else {
-        // If no data is available, fill the rest of the buffer with silence.
         channel.fill(0, outputIndex);
         outputIndex = numSamples;
       }

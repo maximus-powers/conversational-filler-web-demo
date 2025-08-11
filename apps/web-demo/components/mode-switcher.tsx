@@ -5,13 +5,11 @@ import { MessageSquare, Mic } from "lucide-react";
 
 export type AppMode = 'text' | 'voice';
 
-interface ModeSwitcherProps {
+export function ModeSwitcher({ currentMode, onModeChange, disabled }: {
   currentMode: AppMode;
   onModeChange: (mode: AppMode) => void;
   disabled?: boolean;
-}
-
-export function ModeSwitcher({ currentMode, onModeChange, disabled }: ModeSwitcherProps) {
+}) {
   return (
     <div className="flex items-center gap-1 p-1 bg-muted rounded-lg">
       <Button
