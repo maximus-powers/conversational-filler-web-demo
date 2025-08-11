@@ -235,7 +235,7 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
           const result = await llm(contextPrompt, {
             max_new_tokens: 50,
             temperature: 1,
-            do_sample: false,
+            do_sample: true,
             return_full_text: false,
             pad_token_id: 2,
             eos_token_id: 2,
