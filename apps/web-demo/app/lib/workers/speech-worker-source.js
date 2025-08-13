@@ -94,7 +94,7 @@ const transcriber = await pipeline(
   throw error;
 });
 await transcriber(new Float32Array(INPUT_SAMPLE_RATE));
-console.log('TTS Initializaed.');
+console.log('TTS Initialized.');
 self.postMessage({ 
   type: "info", 
   message: "Whisper model loaded successfully"
@@ -144,16 +144,14 @@ async function vad(buffer) {
 }
 
 const processThought = async (thought, userInput, thoughtResponsePairs, splitter) => {
-  let contextPrompt = `<|im_start|>user\n${userInput}<|im_end|>\n`;
+  let contextPrompt = `<|im_start|>user\n${userInput}\n<|im_end|>\n`;
   
-  // Add previous thought-response pairs if any
   for (const pair of thoughtResponsePairs) {
-    contextPrompt += `<|im_start|>knowledge\n${pair.thought}<|im_end|>\n<|im_start|>assistant\n${pair.response}<|im_end|>\n`;
+    contextPrompt += `<|im_start|>knowledge\n${pair.thought}\n<|im_end|>\n<|im_start|>assistant\n${pair.response}<|im_end|>\n`;
   }
   if (thought.length > 0) {
-    contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n`;
+    contextPrompt += `<|im_start|>knowledge\n${thought}\n<|im_end|>\n`;
   }
-  contextPrompt += `<|im_start|>assistant\n`;
 
   console.log("DEBUG: SmolLM Prompt: ", contextPrompt);
   const result = await llm(contextPrompt, {
@@ -177,15 +175,13 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     .replace(/<\|im_start\|>/g, "")
     .replace(/<\|im_end\|>/g, "")
     .replace(/^assistant\s*/i, "")
-    .split("\n")[0]
-    .trim();
+    .trim()
+    .split("\n")[0];
 
   if (response) {
     let messageType;
-    if (thought === "<sil>") {
-      messageType = "silence_response";
-    } else if (thought === "") {
-      messageType = "immediate_response";
+    if (thought === "<|sil|>") {
+      messageType = "filler_response";
     } else {
       messageType = "enhanced_response";
     }
@@ -206,8 +202,8 @@ function startSilenceTimer(userInput, thoughtResponsePairs, splitter) {
   silenceTimer = setTimeout(async () => {
     if (!isGeneratingSilence) {
       isGeneratingSilence = true;
-      self.postMessage({ type: "silence_token", token: "<sil>" });
-      await processThought("<sil>", userInput, thoughtResponsePairs, splitter);
+      self.postMessage({ type: "silence_token", token: "<|sil|>" });
+      await processThought("<|sil|>", userInput, thoughtResponsePairs, splitter);
     }
   }, 1000);
 }
@@ -275,9 +271,9 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
 
   let thoughtResponsePairs = [];
   
-  const immediateResponse = await processThought("", userText, [], splitter);
+  const immediateResponse = await processThought("<|sil|>", userText, [], splitter);
   if (immediateResponse) {
-    thoughtResponsePairs.push({ thought: "", response: immediateResponse });
+    thoughtResponsePairs.push({ thought: "<|sil|>", response: immediateResponse });
     messages.push({ role: "assistant", content: immediateResponse });
     try {
       clearSilenceTimer();
@@ -442,7 +438,7 @@ self.onmessage = async (event) => {
       
     case "playback_ended":
       isPlaying = false;
-      clearSilenceTimer(); // Clear silence timer when playback ends
+      clearSilenceTimer(); 
       return;
       
     case "process_text":
@@ -456,7 +452,7 @@ self.onmessage = async (event) => {
       
     case "end_call":
       messages = [];
-      clearSilenceTimer(); // Clear silence timer when ending call
+      clearSilenceTimer();
       return;
   }
 
