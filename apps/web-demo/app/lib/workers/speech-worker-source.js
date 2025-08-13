@@ -107,6 +107,8 @@ const llm = await pipeline("text-generation", llm_model_id, {
   device: "webgpu",
 });
 await llm("test", { max_new_tokens: 1 }); // Compile shaders
+
+const tokenizer = llm.tokenizer;
 let messages = [];
 if (!voice && tts.voices) {
   voice = Object.keys(tts.voices)[0] || "af_heart";
@@ -119,20 +121,15 @@ self.postMessage({
   voices: tts.voices,
 });
 
-// Global audio buffer to store incoming audio
 const BUFFER = new Float32Array(MAX_BUFFER_DURATION * INPUT_SAMPLE_RATE);
 let bufferPointer = 0;
 
-// Initial state for VAD
 const sr = new Tensor("int64", [INPUT_SAMPLE_RATE], []);
 let state = new Tensor("float32", new Float32Array(2 * 1 * 128), [2, 1, 128]);
-
-
 
 let isRecording = false;
 let isPlaying = false;
 
-// Silence token tracking
 let silenceTimer = null;
 let isGeneratingSilence = false;
 
@@ -169,7 +166,6 @@ function clearSilenceTimer() {
 }
 
 const generateAndProcessThoughts = async (conversationHistory, userInput, immediateResponse, splitter) => {
-  // Clear any existing silence timer since we're starting thought processing
   clearSilenceTimer();
   
   const response = await fetch('/api/chat-thoughts', {
@@ -193,7 +189,6 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
 
   const reader = response.body?.getReader();
   if (!reader) {
-    // Start silence timer if no thoughts available
     if (splitter) {
       startSilenceTimer(splitter);
     }
@@ -221,7 +216,6 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
         if (thought && !thoughts.includes(thought)) {
           thoughts.push(thought);
           
-          // Reset silence timer since we received a new thought
           clearSilenceTimer();
           
           self.postMessage({ type: "thought", thought, index: thoughtIndex++ });
@@ -233,12 +227,12 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
           contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n<|im_start|>assistant\n`;
 
           const result = await llm(contextPrompt, {
-            max_new_tokens: 50,
+            max_new_tokens: 128,
             temperature: 1,
-            do_sample: true,
+            do_sample: false,
             return_full_text: false,
-            pad_token_id: 2,
-            eos_token_id: 2,
+            pad_token_id: tokenizer.pad_token_id,
+            eos_token_id: tokenizer.eos_token_id,
           });
 
           let response = "";
@@ -275,12 +269,9 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
     }
   }
 
-  // Start silence timer after all thoughts have been processed
   if (splitter && thoughts.length === 0) {
-    // No thoughts were generated, start silence timer
     startSilenceTimer(splitter);
   } else if (splitter) {
-    // Thoughts were generated, start timer for potential silence after them
     startSilenceTimer(splitter);
   }
 
@@ -290,7 +281,6 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
 const speechToSpeech = async (buffer) => {
   isPlaying = true;
   
-  // Clear any existing silence timer when starting new speech processing
   clearSilenceTimer();
 
   // transcribe
@@ -348,9 +338,11 @@ const speechToSpeech = async (buffer) => {
   // generate immediate response using smollm
   const simplePrompt = `User: ${text}\nAssistant:`;
   const immediateResult = await llm(simplePrompt, {
-    max_new_tokens: 25,
+    max_new_tokens: 128,
     temperature: 1,
-    do_sample: true,
+    do_sample: false,
+    pad_token_id: tokenizer.pad_token_id,
+    eos_token_id: tokenizer.eos_token_id,
     return_full_text: false,
   });
 
@@ -435,7 +427,6 @@ let prevBuffers = [];
 async function processTextMode(text, enableTTS = false) {
   isPlaying = true;
   
-  // Clear any existing silence timer when starting text processing
   clearSilenceTimer();
   
   messages.push({ role: "user", content: text });
@@ -443,9 +434,11 @@ async function processTextMode(text, enableTTS = false) {
   // generate immediate response
   const simplePrompt = `User: ${text}\nAssistant:`;
   const immediateResult = await llm(simplePrompt, {
-    max_new_tokens: 25,
+    max_new_tokens: 128,
     temperature: 1,
-    do_sample: true,
+    do_sample: false,
+    pad_token_id: tokenizer.pad_token_id,
+    eos_token_id: tokenizer.eos_token_id,
     return_full_text: false,
   });
 
