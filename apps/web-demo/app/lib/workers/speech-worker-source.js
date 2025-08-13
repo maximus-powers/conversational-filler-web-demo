@@ -147,7 +147,7 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
   let contextPrompt = `<|im_start|>user\n${userInput}\n<|im_end|>\n`;
   
   for (const pair of thoughtResponsePairs) {
-    contextPrompt += `<|im_start|>knowledge\n${pair.thought}\n<|im_end|>\n<|im_start|>assistant\n${pair.response}<|im_end|>\n`;
+    contextPrompt += `<|im_start|>knowledge\n${pair.thought}\n<|im_end|>\n<|im_start|>assistant\n${pair.response}\n<|im_end|>\n`;
   }
   if (thought.length > 0) {
     contextPrompt += `<|im_start|>knowledge\n${thought}\n<|im_end|>\n`;
