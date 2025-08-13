@@ -150,14 +150,12 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
   for (const pair of thoughtResponsePairs) {
     contextPrompt += `<|im_start|>knowledge\n${pair.thought}<|im_end|>\n<|im_start|>assistant\n${pair.response}<|im_end|>\n`;
   }
-  
-  // Only add knowledge section if thought is not empty
   if (thought.length > 0) {
     contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n`;
   }
-  
   contextPrompt += `<|im_start|>assistant\n`;
 
+  console.log("DEBUG: SmolLM Prompt: ", contextPrompt);
   const result = await llm(contextPrompt, {
     max_new_tokens: 128,
     temperature: 1,
@@ -166,6 +164,7 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     pad_token_id: tokenizer.pad_token_id,
     eos_token_id: tokenizer.eos_token_id,
   });
+  console.log("DEBUG: SmolLM Response: ", result);
 
   let response = "";
   if (Array.isArray(result) && result[0]?.generated_text) {
