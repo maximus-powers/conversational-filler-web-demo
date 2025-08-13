@@ -133,6 +133,7 @@ let isPlaying = false;
 let silenceTimer = null;
 let isGeneratingSilence = false;
 
+////////// VAD
 async function vad(buffer) {
   const input = new Tensor("float32", buffer, [1, buffer.length]);
   const { stateN, output } = await silero_vad({ input, sr, state });
@@ -143,20 +144,19 @@ async function vad(buffer) {
   );
 }
 
-function startSilenceTimer(splitter) {
+////////// SILENCE TOKEN HELPERS
+function startSilenceTimer(userInput, immediateResponse, splitter) {
   if (silenceTimer) {
     clearTimeout(silenceTimer);
   }
-  
-  silenceTimer = setTimeout(() => {
-    if (!isGeneratingSilence && splitter) {
+  silenceTimer = setTimeout(async () => {
+    if (!isGeneratingSilence) {
       isGeneratingSilence = true;
-      splitter.push("<sil>");
       self.postMessage({ type: "silence_token", token: "<sil>" });
+      await processThought("<sil>", userInput, immediateResponse, splitter);
     }
-  }, 1000); // 1 second delay
+  }, 1000);
 }
-
 function clearSilenceTimer() {
   if (silenceTimer) {
     clearTimeout(silenceTimer);
@@ -165,9 +165,49 @@ function clearSilenceTimer() {
   isGeneratingSilence = false;
 }
 
+
+//////// PROCESSING MAIN FNS
+const processThought = async (thought, userInput, immediateResponse, splitter) => {
+  let contextPrompt = `<|im_start|>user\n${userInput}<|im_end|>\n`;
+  if (immediateResponse) {
+    contextPrompt += `<|im_start|>assistant\n${immediateResponse}<|im_end|>\n`;
+  }
+  contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n<|im_start|>assistant\n`;
+
+  const result = await llm(contextPrompt, {
+    max_new_tokens: 128,
+    temperature: 1,
+    do_sample: false,
+    return_full_text: false,
+    pad_token_id: tokenizer.pad_token_id,
+    eos_token_id: tokenizer.eos_token_id,
+  });
+
+  let response = "";
+  if (Array.isArray(result) && result[0]?.generated_text) {
+    response = result[0].generated_text;
+  } else if (result?.generated_text) {
+    response = result.generated_text;
+  }
+  
+  response = response
+    .replace(/<\|im_start\|>/g, "")
+    .replace(/<\|im_end\|>/g, "")
+    .replace(/^assistant\s*/i, "")
+    .split("\n")[0]
+    .trim();
+
+  if (response) {
+    const messageType = thought === "<sil>" ? "silence_response" : "enhanced_response";
+    self.postMessage({ type: messageType, response });
+    if (splitter) { // add to TTS if available
+      splitter.push(" " + response);
+    }
+  }
+};
+
 const generateAndProcessThoughts = async (conversationHistory, userInput, immediateResponse, splitter) => {
   clearSilenceTimer();
-  
   const response = await fetch('/api/chat-thoughts', {
     method: 'POST',
     headers: {
@@ -178,20 +218,15 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
     }),
   });
 
+  // sil token handling
   if (!response.ok) {
     console.warn('Failed to get thoughts from OpenAI');
-    // Start silence timer if no thoughts available
-    if (splitter) {
-      startSilenceTimer(splitter);
-    }
+    startSilenceTimer(userInput, immediateResponse, splitter);
     return [];
   }
-
   const reader = response.body?.getReader();
   if (!reader) {
-    if (splitter) {
-      startSilenceTimer(splitter);
-    }
+    startSilenceTimer(userInput, immediateResponse, splitter);
     return [];
   }
 
@@ -199,10 +234,14 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
   let buffer = '';
   const thoughts = [];
   let thoughtIndex = 0;
+  let streamComplete = false;
 
   while (true) {
     const { done, value } = await reader.read();
-    if (done) break;
+    if (done) {
+      streamComplete = true;
+      break;
+    }
     
     const chunk = decoder.decode(value, { stream: true });
     buffer += chunk;
@@ -219,41 +258,11 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
           clearSilenceTimer();
           
           self.postMessage({ type: "thought", thought, index: thoughtIndex++ });
+          await processThought(thought, userInput, immediateResponse, splitter);
           
-          let contextPrompt = `<|im_start|>user\n${userInput}<|im_end|>\n`;
-          if (immediateResponse) {
-            contextPrompt += `<|im_start|>assistant\n${immediateResponse}<|im_end|>\n`;
-          }
-          contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n<|im_start|>assistant\n`;
-
-          const result = await llm(contextPrompt, {
-            max_new_tokens: 128,
-            temperature: 1,
-            do_sample: false,
-            return_full_text: false,
-            pad_token_id: tokenizer.pad_token_id,
-            eos_token_id: tokenizer.eos_token_id,
-          });
-
-          let response = "";
-          if (Array.isArray(result) && result[0]?.generated_text) {
-            response = result[0].generated_text;
-          } else if (result?.generated_text) {
-            response = result.generated_text;
-          }
-          
-          response = response
-            .replace(/<\|im_start\|>/g, "")
-            .replace(/<\|im_end\|>/g, "")
-            .replace(/^assistant\s*/i, "")
-            .split("\n")[0]
-            .trim();
-
-          if (response) {
-            self.postMessage({ type: "enhanced_response", response });
-            if (splitter) { // add to TTS if available
-              splitter.push(" " + response);
-            }
+          // start sil timer once each thought is finished processing
+          if (!streamComplete) {
+            startSilenceTimer(userInput, immediateResponse, splitter);
           }
         }
         // rm processed thought from buffer
@@ -265,22 +274,22 @@ const generateAndProcessThoughts = async (conversationHistory, userInput, immedi
     }
 
     if (buffer.includes('[done]')) {
+      streamComplete = true;
       break;
     }
   }
 
-  if (splitter && thoughts.length === 0) {
-    startSilenceTimer(splitter);
-  } else if (splitter) {
-    startSilenceTimer(splitter);
+  if (thoughts.length === 0) {
+    startSilenceTimer(userInput, immediateResponse, splitter); // if no thoughts extracted
   }
 
   return thoughts;
 };
 
+
+////// VOICE MODE PIPELINE
 const speechToSpeech = async (buffer) => {
   isPlaying = true;
-  
   clearSilenceTimer();
 
   // transcribe
@@ -424,6 +433,7 @@ const dispatchForTranscriptionAndResetAudioBuffer = (overflow) => {
 let prevBuffers = [];
 
 
+//////// TEXT MODE PIPELINE
 async function processTextMode(text, enableTTS = false) {
   isPlaying = true;
   
