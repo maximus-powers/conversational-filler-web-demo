@@ -129,6 +129,17 @@ export class UnifiedPipeline {
         case "enhanced_response":
           this.handleEnhancedResponse(data);
           break;
+        case "silence_response":
+          this.handleSilenceResponse(data);
+          break;
+        case "silence_token":
+          this.config.onTimelineEvent?.(
+            "silence-token",
+            "System",
+            "Silence detected",
+            data.token,
+          );
+          break;
         case "thought":
           this.config.onThoughtReceived?.(data.thought, data.index);
           this.config.onTimelineEvent?.(
@@ -232,6 +243,21 @@ export class UnifiedPipeline {
         "smollm-enhanced",
         "SmolLM",
         "Enhanced response",
+        data.response,
+      );
+    }
+  }
+
+  private handleSilenceResponse(data: any) {
+    if (this.state.currentMessageId) {
+      this.config.onMessageUpdated?.(
+        this.state.currentMessageId,
+        data.response,
+      );
+      this.config.onTimelineEvent?.(
+        "smollm-silence",
+        "SmolLM",
+        "Silence response",
         data.response,
       );
     }
