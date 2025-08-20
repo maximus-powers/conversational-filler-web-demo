@@ -132,6 +132,9 @@ let isPlaying = false;
 
 let silenceTimer = null;
 let isGeneratingSilence = false;
+let isProcessingThought = false;
+let thoughtQueue = [];
+let streamComplete = false;
 
 async function vad(buffer) {
   const input = new Tensor("float32", buffer, [1, buffer.length]);
@@ -150,7 +153,7 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     contextPrompt += `<|im_start|>knowledge\n${pair.thought}<|im_end|>\n<|im_start|>assistant\n${pair.response}<|im_end|>\n`;
   }
   if (thought.length > 0) {
-    contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n`;
+    contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n<|im_start|>assistant\n`;
   }
 
   console.log("DEBUG: SmolLM Prompt: ", contextPrompt);
@@ -195,12 +198,35 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
   return response;
 };
 
+const processThoughtQueue = async (userInput, thoughtResponsePairs, splitter) => {
+  if (isProcessingThought || thoughtQueue.length === 0) return;
+  
+  isProcessingThought = true;
+  let localThoughtIndex = 0;
+  while (thoughtQueue.length > 0) {
+    const thought = thoughtQueue.shift();
+    clearSilenceTimer();
+    
+    self.postMessage({ type: "thought", thought, index: localThoughtIndex++ });
+    const thoughtResponse = await processThought(thought, userInput, thoughtResponsePairs, splitter);
+    
+    if (thoughtResponse) {
+      thoughtResponsePairs.push({ thought: thought, response: thoughtResponse });
+    }
+  }
+  isProcessingThought = false;
+  
+  if (!isGeneratingSilence && !streamComplete) {
+    startSilenceTimer(userInput, thoughtResponsePairs, splitter);
+  }
+};
+
 function startSilenceTimer(userInput, thoughtResponsePairs, splitter) {
   if (silenceTimer) {
     clearTimeout(silenceTimer);
   }
   silenceTimer = setTimeout(async () => {
-    if (!isGeneratingSilence) {
+    if (!isGeneratingSilence && !isProcessingThought) {
       isGeneratingSilence = true;
       self.postMessage({ type: "silence_token", token: "<|sil|>" });
       await processThought("<|sil|>", userInput, thoughtResponsePairs, splitter);
@@ -270,6 +296,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   }
 
   let thoughtResponsePairs = [];
+  streamComplete = false;
   
   const immediateResponse = await processThought("<|sil|>", userText, [], splitter);
   if (immediateResponse) {
@@ -299,8 +326,6 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
           const decoder = new TextDecoder();
           let buffer = '';
           const thoughts = [];
-          let thoughtIndex = 0;
-          let streamComplete = false;
 
           while (true) {
             const { done, value } = await reader.read();
@@ -320,20 +345,8 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
                 const thought = buffer.substring(startIndex + 4, endIndex).trim();
                 if (thought && !thoughts.includes(thought)) {
                   thoughts.push(thought);
-                  
-                  clearSilenceTimer();
-                  
-                  self.postMessage({ type: "thought", thought, index: thoughtIndex++ });
-                  const thoughtResponse = await processThought(thought, userText, thoughtResponsePairs, splitter);
-                  
-                  if (thoughtResponse) {
-                    thoughtResponsePairs.push({ thought: thought, response: thoughtResponse });
-                  }
-                  
-                  // start sil timer once each thought is finished processing
-                  if (!streamComplete) {
-                    startSilenceTimer(userText, thoughtResponsePairs, splitter);
-                  }
+                  thoughtQueue.push(thought);
+                  processThoughtQueue(userText, thoughtResponsePairs, splitter);
                 }
                 // rm processed thought from buffer
                 buffer = buffer.substring(endIndex + 4);
@@ -345,13 +358,12 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
 
             if (buffer.includes('[done]')) {
               streamComplete = true;
+              clearSilenceTimer();
               break;
             }
           }
 
-          if (thoughts.length === 0) {
-            startSilenceTimer(userText, thoughtResponsePairs, splitter); // if no thoughts extracted
-          }
+          await processThoughtQueue(userText, thoughtResponsePairs, splitter);
         }
       }
     } catch (error) {
@@ -452,6 +464,9 @@ self.onmessage = async (event) => {
       
     case "end_call":
       messages = [];
+      thoughtQueue = [];
+      isProcessingThought = false;
+      streamComplete = false;
       clearSilenceTimer();
       return;
   }
