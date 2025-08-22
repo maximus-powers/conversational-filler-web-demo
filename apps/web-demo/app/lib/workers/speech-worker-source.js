@@ -1,4 +1,4 @@
-import { AutoModel, Tensor, pipeline } from "@huggingface/transformers";
+import { AutoTokenizer, AutoModelForCausalLM, AutoModel, Tensor, pipeline } from "@huggingface/transformers";
 
 import { KokoroTTS, TextSplitterStream } from "kokoro-js";
 console.log('KokoroTTS imported:', typeof KokoroTTS, 'TextSplitterStream:', typeof TextSplitterStream);
@@ -102,13 +102,25 @@ self.postMessage({
 
 console.log('Initializing SmolLM.');
 const llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
-const llm = await pipeline("text-generation", llm_model_id, {
+
+// pipeline seemed to have a bug with loading the custom tokenizer
+const tokenizer = await AutoTokenizer.from_pretrained(llm_model_id, {
+  dtype: "fp32",
+  device: "webgpu",
+});
+const llm = await AutoModelForCausalLM.from_pretrained(llm_model_id, {
   dtype: "fp32", 
   device: "webgpu",
 });
-await llm("test", { max_new_tokens: 1 }); // Compile shaders
 
-const tokenizer = llm.tokenizer;
+// needs to warm up with proper format and compile shaders (this is why we were getting such bad responses before)
+const warmupPrompt = "<|im_start|>user\nHello<|im_end|>\n<|im_start|>knowledge\n<|sil|><|im_end|>\n";
+const warmupInput = tokenizer(warmupPrompt);
+await llm.generate({
+  ...warmupInput,
+  max_new_tokens: 10,
+  do_sample: false,
+});
 let messages = [];
 if (!voice && tts.voices) {
   voice = Object.keys(tts.voices)[0] || "af_heart";
@@ -153,28 +165,25 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     contextPrompt += `<|im_start|>knowledge\n${pair.thought}<|im_end|>\n<|im_start|>assistant\n${pair.response}<|im_end|>\n`;
   }
   if (thought.length > 0) {
-    contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n<|im_start|>assistant\n`;
+    contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n`;
   }
 
   console.log("DEBUG: SmolLM Prompt: ", contextPrompt);
-  const result = await llm(contextPrompt, {
+  const inputs = tokenizer(contextPrompt);
+  const outputs = await llm.generate({
+    ...inputs,
     max_new_tokens: 128,
-    temperature: 1,
+    temperature: 1.0,
     do_sample: false,
-    return_full_text: false,
     pad_token_id: tokenizer.pad_token_id,
     eos_token_id: tokenizer.eos_token_id,
   });
-  console.log("DEBUG: SmolLM Response: ", result);
+  console.log("DEBUG: Output tokens:", [...outputs.data]);
+  const newTokens = Array.from(outputs.data.slice(inputs.input_ids.data.length)).map(t => Number(t));
+  const generatedText = tokenizer.decode(newTokens, { skip_special_tokens: true });
+  console.log("DEBUG: Generated text:", generatedText);
 
-  let response = "";
-  if (Array.isArray(result) && result[0]?.generated_text) {
-    response = result[0].generated_text;
-  } else if (result?.generated_text) {
-    response = result.generated_text;
-  }
-  
-  response = response
+  response = generatedText
     .replace(/<\|im_start\|>/g, "")
     .replace(/<\|im_end\|>/g, "")
     .replace(/^assistant\s*/i, "")
@@ -244,6 +253,11 @@ function clearSilenceTimer() {
 const processInput = async (input, isVoiceMode, enableTTS) => {
   isPlaying = true;
   clearSilenceTimer();
+  
+  thoughtQueue = [];
+  isProcessingThought = false;
+  streamComplete = false;
+  self.postMessage({ type: "conversation_turn_start" });
 
   let userText = input;
   

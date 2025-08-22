@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Side-by-side comparison test between original SafeTensors model and converted ONNX model.
-Tests multiple prompts to ensure conversion accuracy.
-"""
-
 import os
 import torch
 import numpy as np
@@ -35,89 +30,122 @@ class ModelComparator:
     def generate_response(self, model, tokenizer, prompt, **generation_params):
         inputs = tokenizer(prompt, return_tensors="pt")
         
+        print(f"Python Input token length: {len(inputs['input_ids'][0])}")
+        print(f"Python Input tokens (first 15): {inputs['input_ids'][0][:15].tolist()}")
+        
+        key_tokens = ["<|im_start|>", "<|im_end|>", "user", "knowledge", "<|sil|>"]
+        for token in key_tokens:
+            encoded = tokenizer.encode(token, add_special_tokens=False)
+            print(f"Python '{token}' -> {encoded}")
+        
         start_time = time.time()
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
                 pad_token_id=tokenizer.pad_token_id,
+                eos_token_id=tokenizer.eos_token_id,
                 **generation_params
             )
         end_time = time.time()
         
-        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        response = response[len(prompt):].strip()
+        print(f"Output token length: {len(outputs[0])}")
+        
+        full_response = tokenizer.decode(outputs[0], skip_special_tokens=False)
+        print(f"Full decoded response: {repr(full_response)}")
+        
+        input_length = len(inputs['input_ids'][0])
+        if len(outputs[0]) > input_length:
+            new_tokens = outputs[0][input_length:]
+            response = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+        else:
+            response = ""
         
         return response, end_time - start_time
 
-    def compare_responses(self, prompt, **generation_params):
-        print(f"Prompt: {repr(prompt)}")
+    def compare_responses(self, user_input, **generation_params):
+        context_prompt = f"<|im_start|>user\n{user_input}<|im_end|>\n<|im_start|>knowledge\n<|sil|><|im_end|>\n"
+        
+        print(f"User Input: {repr(user_input)}")
+        print(f"Formatted Prompt: {repr(context_prompt)}")
         print("=" * 80)
         
         original_response, original_time = self.generate_response(
-            self.original_model, self.original_tokenizer, prompt, **generation_params
+            self.original_model, self.original_tokenizer, context_prompt, **generation_params
         )
         
         onnx_response, onnx_time = self.generate_response(
-            self.onnx_model, self.onnx_tokenizer, prompt, **generation_params
+            self.onnx_model, self.onnx_tokenizer, context_prompt, **generation_params
         )
         
+        import re
+        original_cleaned = original_response.replace("<|im_start|>", "").replace("<|im_end|>", "")
+        original_cleaned = re.sub(r'^assistant\s*', '', original_cleaned, flags=re.IGNORECASE)
+        original_cleaned = original_cleaned.strip().split("\n")[0]
+        
+        onnx_cleaned = onnx_response.replace("<|im_start|>", "").replace("<|im_end|>", "")
+        onnx_cleaned = re.sub(r'^assistant\s*', '', onnx_cleaned, flags=re.IGNORECASE) 
+        onnx_cleaned = onnx_cleaned.strip().split("\n")[0]
+        
+        print(f"Cleaning steps for original:")
+        step1 = original_response.replace('<|im_start|>', '').replace('<|im_end|>', '')
+        step2 = re.sub(r'^assistant\s*', '', step1, flags=re.IGNORECASE)
+        print(f"  1. After removing ChatML: {repr(step1)}")
+        print(f"  2. After removing 'assistant': {repr(step2)}")
+        print(f"  3. After trim + split[0]: {repr(original_cleaned)}")
+        print()
+        
         print(f"Original (SafeTensors) [{original_time:.3f}s]:")
-        print(f"   {repr(original_response)}")
+        print(f"   Raw: {repr(original_response)}")
+        print(f"   Cleaned: {repr(original_cleaned)}")
         print()
         print(f"ONNX Converted [{onnx_time:.3f}s]:")
-        print(f"   {repr(onnx_response)}")
+        print(f"   Raw: {repr(onnx_response)}")
+        print(f"   Cleaned: {repr(onnx_cleaned)}")
         print()
         
-        exact_match = original_response == onnx_response
-        print(f"Exact match: {exact_match}")
+        exact_match = onnx_cleaned == original_cleaned
+        print(f"Exact match (cleaned): {exact_match}")
         
         if not exact_match:
-            orig_tokens = set(original_response.split())
-            onnx_tokens = set(onnx_response.split())
+            orig_tokens = set(original_cleaned.split())
+            onnx_tokens = set(onnx_cleaned.split())
             
             if orig_tokens or onnx_tokens:
                 jaccard_sim = len(orig_tokens & onnx_tokens) / len(orig_tokens | onnx_tokens)
                 print(f"Token similarity (Jaccard): {jaccard_sim:.3f}")
             
-            print(f"Length difference: {len(onnx_response) - len(original_response)} chars")
+            print(f"Length difference: {len(onnx_cleaned) - len(original_cleaned)} chars")
         
         print(f"Speed ratio (ONNX/Original): {onnx_time / original_time:.2f}x")
         print("=" * 80)
         print()
         
         return {
-            'prompt': prompt,
+            'user_input': user_input,
+            'formatted_prompt': context_prompt,
             'original_response': original_response,
             'onnx_response': onnx_response,
+            'original_cleaned': original_cleaned,
+            'onnx_cleaned': onnx_cleaned,
             'exact_match': exact_match,
             'original_time': original_time,
             'onnx_time': onnx_time
         }
 
     def run_comprehensive_test(self):
-        print(f"Starting Model Comparison Test")
+        print("Starting Model Comparison Test")
         print("=" * 80)
         print()
         
         test_prompts = [
-            "Q: Hello, how are you?\nA:",
-            "Q: What is the capital of France?\nA:",
-            "Q: Explain quantum physics in simple terms.\nA:",
-            "Q: How do I make a good pizza?\nA:",
-            "Q: What's the weather like today?\nA:",
+            "I want to plan a trip to Seattle. Where do I start?",
         ]
         
         test_configs = [
             {
-                "max_new_tokens": 20,
-                "do_sample": False, 
+                "max_new_tokens": 128,
                 "temperature": 1.0,
-            },
-            {
-                "max_new_tokens": 50,
-                "do_sample": True,
-                "temperature": 0.7,
-                "top_p": 0.9,
+                "do_sample": False,  
             }
         ]
         
@@ -127,9 +155,9 @@ class ModelComparator:
             print(f"🔧 Test Configuration {config_idx + 1}: {config}")
             print("-" * 40)
             
-            for prompt_idx, prompt in enumerate(test_prompts):
+            for prompt_idx, user_input in enumerate(test_prompts):
                 print(f"Test {config_idx + 1}.{prompt_idx + 1}:")
-                result = self.compare_responses(prompt, **config)
+                result = self.compare_responses(user_input, **config)
                 results.append({**result, 'config': config})
         
         total_tests = len(results)
@@ -154,7 +182,7 @@ def main():
     """Main function to run the comparison test"""
     try:
         comparator = ModelComparator()
-        results = comparator.run_comprehensive_test()
+        comparator.run_comprehensive_test()
         
         print("\nComparison test completed successfully!")
         

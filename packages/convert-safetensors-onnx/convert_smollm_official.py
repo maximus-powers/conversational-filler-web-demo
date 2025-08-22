@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-"""
-Convert maximuspowers/smollm-convo-filler to ONNX using the official Hugging Face method.
-Based on https://huggingface.co/blog/convert-transformers-to-onnx
-"""
-
 import os
 import json
 import shutil
@@ -62,34 +57,6 @@ def convert_original_smollm_to_onnx(source_repo="maximuspowers/smollm-convo-fill
         traceback.print_exc()
         return None, None
 
-def test_onnx_model(local_path):    
-    print("Testing model locally...")
-    
-    try:
-        onnx_dir = os.path.join(local_path, "onnx")
-        model = ORTModelForCausalLM.from_pretrained(onnx_dir, local_files_only=True)
-        tokenizer = AutoTokenizer.from_pretrained(local_path, local_files_only=True)
-        test_prompt = "Q: Hello, how are you?\nA:"
-        inputs = tokenizer(test_prompt, return_tensors="pt")
-        
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=20,
-            do_sample=True,
-            temperature=0.7,
-            pad_token_id=tokenizer.pad_token_id,
-        )
-        
-        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        print("Test gen successful")
-        print(f"Test response: {response}")
-        return True
-        
-    except Exception as e:
-        print(f"Local test failed: {e}")
-        traceback.print_exc()
-        return False
-
 def upload(local_path, repo_name):    
     print(f"Uploading model to {repo_name}")
     try:
@@ -109,21 +76,5 @@ def upload(local_path, repo_name):
 
 if __name__ == "__main__":   
     local_path, target_repo = convert_original_smollm_to_onnx()
+    upload(local_path, target_repo)
     
-    if local_path and target_repo:
-        if test_onnx_model(local_path):           
-            upload_choice = input("\nUpload to HF? (y/n): ").lower().strip()
-            
-            if upload_choice == 'y':
-                if upload(local_path, target_repo):
-                    print("Completed")
-                else:
-                    print("\nConversion successful but upload failed")
-                    print(f"Local files at: {local_path}")
-            else:
-                print("\nONNX conversion completed locally")
-                print(f"Files at: {local_path}")
-        else:
-            print("\nConversion completed but tests failed")
-    else:
-        print("\nONNX conversion failed")

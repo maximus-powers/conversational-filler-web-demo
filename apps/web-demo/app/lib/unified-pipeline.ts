@@ -123,6 +123,15 @@ export class UnifiedPipeline {
         case "transcription":
           this.handleTranscription(data.text);
           break;
+        case "conversation_turn_start":
+          this.state.currentMessageId = null;
+          this.config.onTimelineEvent?.(
+            "conversation-turn",
+            "System",
+            "New conversation turn",
+            "",
+          );
+          break;
         case "immediate_response":
           this.handleImmediateResponse(data);
           break;
@@ -366,6 +375,8 @@ export class UnifiedPipeline {
     }
 
     this.state.isProcessing = true;
+    this.state.currentMessageId = null;
+    
     const userMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     this.config.onMessageReceived?.("user", text, userMessageId);
     this.config.onTimelineEvent?.("user-input", "User", "Text input", text);
