@@ -15,6 +15,7 @@
     "build:worker": "node build-worker.js"
   },
   "dependencies": {
+    "@ai-sdk/google": "^2.0.8",
     "@ai-sdk/openai": "^2.0.2",
     "@convo-filler/ui": "workspace:*",
     "@huggingface/transformers": "^3.7.1",

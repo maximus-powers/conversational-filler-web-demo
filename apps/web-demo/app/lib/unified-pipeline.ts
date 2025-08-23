@@ -28,6 +28,7 @@ export interface UnifiedPipelineState {
   isPlaying: boolean;
   voices: Record<string, any>;
   currentMessageId: string | null;
+  thoughtProvider: "openai" | "gemini";
 }
 
 export class UnifiedPipeline {
@@ -50,6 +51,7 @@ export class UnifiedPipeline {
       isPlaying: false,
       voices: {},
       currentMessageId: null,
+      thoughtProvider: "openai",
     };
   }
 
@@ -151,9 +153,10 @@ export class UnifiedPipeline {
           break;
         case "thought":
           this.config.onThoughtReceived?.(data.thought, data.index);
+          const providerName = data.thoughtProvider === "gemini" ? "Gemini" : "OpenAI";
           this.config.onTimelineEvent?.(
             "thought",
-            "OpenAI",
+            providerName,
             `Thought ${data.index + 1}`,
             data.thought,
           );
@@ -405,6 +408,13 @@ export class UnifiedPipeline {
   setVoice(voice: string) {
     if (this.worker) {
       this.worker.postMessage({ type: "set_voice", voice });
+    }
+  }
+
+  setThoughtProvider(provider: "openai" | "gemini") {
+    this.state.thoughtProvider = provider;
+    if (this.worker) {
+      this.worker.postMessage({ type: "set_thought_provider", provider });
     }
   }
 

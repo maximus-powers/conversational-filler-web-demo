@@ -122,6 +122,7 @@ await llm.generate({
   do_sample: false,
 });
 let messages = [];
+let thoughtProvider = "openai"; // default to OpenAI
 if (!voice && tts.voices) {
   voice = Object.keys(tts.voices)[0] || "af_heart";
 }
@@ -198,7 +199,7 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
       messageType = "enhanced_response";
     }
     
-    self.postMessage({ type: messageType, response });
+    self.postMessage({ type: messageType, response, thoughtProvider });
     if (splitter) { // add to TTS if available
       splitter.push(thought === "" ? response : " " + response);
     }
@@ -216,7 +217,7 @@ const processThoughtQueue = async (userInput, thoughtResponsePairs, splitter) =>
     const thought = thoughtQueue.shift();
     clearSilenceTimer();
     
-    self.postMessage({ type: "thought", thought, index: localThoughtIndex++ });
+    self.postMessage({ type: "thought", thought, index: localThoughtIndex++, thoughtProvider });
     const thoughtResponse = await processThought(thought, userInput, thoughtResponsePairs, splitter);
     
     if (thoughtResponse) {
@@ -318,7 +319,10 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
     messages.push({ role: "assistant", content: immediateResponse });
     try {
       clearSilenceTimer();
-      const thoughtsResponse = await fetch('/api/chat-thoughts', {
+      const thoughtsEndpoint = thoughtProvider === 'gemini' ? '/api/chat-thoughts-gemini' : '/api/chat-thoughts';
+      console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
+      
+      const thoughtsResponse = await fetch(thoughtsEndpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -330,7 +334,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
 
       // sil token handling
       if (!thoughtsResponse.ok) {
-        console.warn('Failed to get thoughts from OpenAI');
+        console.warn(`Failed to get thoughts from ${thoughtProvider}`);
         startSilenceTimer(userText, thoughtResponsePairs, splitter);
       } else {
         const reader = thoughtsResponse.body?.getReader();
@@ -460,6 +464,11 @@ self.onmessage = async (event) => {
       
     case "set_voice":
       voice = event.data.voice;
+      return;
+
+    case "set_thought_provider":
+      thoughtProvider = event.data.provider;
+      console.log(`Thought provider set to: ${thoughtProvider}`);
       return;
       
     case "playback_ended":
