@@ -32,7 +32,7 @@ export function Chat() {
   const [availableVoices, setAvailableVoices] = useState<Record<string, any>>(
     {},
   );
-  const [thoughtProvider, setThoughtProvider] = useState<"openai" | "gemini">("openai");
+  const [thoughtProvider, setThoughtProvider] = useState<"openai" | "gemini" | "none">("openai");
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -299,13 +299,14 @@ export function Chat() {
 
               <select
                 value={thoughtProvider}
-                onChange={(e) => setThoughtProvider(e.target.value as "openai" | "gemini")}
+                onChange={(e) => setThoughtProvider(e.target.value as "openai" | "gemini" | "none")}
                 className="text-sm px-2 py-1 border rounded-md bg-background"
                 disabled={modelLoading}
                 title="Select thought provider"
               >
                 <option value="openai">OpenAI (GPT-4)</option>
                 <option value="gemini">Google (Gemini)</option>
+                <option value="none">None (SmolLM Only)</option>
               </select>
             </div>
 

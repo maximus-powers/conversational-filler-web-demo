@@ -319,69 +319,79 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
     messages.push({ role: "assistant", content: immediateResponse });
     try {
       clearSilenceTimer();
-      const thoughtsEndpoint = thoughtProvider === 'gemini' ? '/api/chat-thoughts-gemini' : '/api/chat-thoughts';
-      console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
       
-      const thoughtsResponse = await fetch(thoughtsEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messages: messages
-        }),
-      });
-
-      // sil token handling
-      if (!thoughtsResponse.ok) {
-        console.warn(`Failed to get thoughts from ${thoughtProvider}`);
-        startSilenceTimer(userText, thoughtResponsePairs, splitter);
+      if (thoughtProvider === 'none') {
+        console.log('Using local-only mode with silence tokens');
+        for (let i = 0; i < 4; i++) {
+          thoughtQueue.push("<|sil|>"); // queue 4 sil tokens for smollm to process without thoughts
+        }
+        streamComplete = true;
+        await processThoughtQueue(userText, thoughtResponsePairs, splitter);
       } else {
-        const reader = thoughtsResponse.body?.getReader();
-        if (!reader) {
+        const thoughtsEndpoint = thoughtProvider === 'gemini' ? '/api/chat-thoughts-gemini' : '/api/chat-thoughts';
+        console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
+        
+        const thoughtsResponse = await fetch(thoughtsEndpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            messages: messages
+          }),
+        });
+
+        // sil token handling
+        if (!thoughtsResponse.ok) {
+          console.warn(`Failed to get thoughts from ${thoughtProvider}`);
           startSilenceTimer(userText, thoughtResponsePairs, splitter);
         } else {
-          const decoder = new TextDecoder();
-          let buffer = '';
-          const thoughts = [];
+          const reader = thoughtsResponse.body?.getReader();
+          if (!reader) {
+            startSilenceTimer(userText, thoughtResponsePairs, splitter);
+          } else {
+            const decoder = new TextDecoder();
+            let buffer = '';
+            const thoughts = [];
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              streamComplete = true;
-              break;
-            }
-            
-            const chunk = decoder.decode(value, { stream: true });
-            buffer += chunk;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                streamComplete = true;
+                break;
+              }
+              
+              const chunk = decoder.decode(value, { stream: true });
+              buffer += chunk;
 
-            // extract thoughts from buffer with [bt] and [et] markers
-            let startIndex = buffer.indexOf('[bt]');
-            while (startIndex !== -1) {
-              const endIndex = buffer.indexOf('[et]', startIndex);
-              if (endIndex !== -1) {
-                const thought = buffer.substring(startIndex + 4, endIndex).trim();
-                if (thought && !thoughts.includes(thought)) {
-                  thoughts.push(thought);
-                  thoughtQueue.push(thought);
-                  processThoughtQueue(userText, thoughtResponsePairs, splitter);
+              // extract thoughts from buffer with [bt] and [et] markers
+              let startIndex = buffer.indexOf('[bt]');
+              while (startIndex !== -1) {
+                const endIndex = buffer.indexOf('[et]', startIndex);
+                if (endIndex !== -1) {
+                  const thought = buffer.substring(startIndex + 4, endIndex).trim();
+                  if (thought && !thoughts.includes(thought)) {
+                    thoughts.push(thought);
+                    thoughtQueue.push(thought);
+                    processThoughtQueue(userText, thoughtResponsePairs, splitter);
+                  }
+                  // rm processed thought from buffer
+                  buffer = buffer.substring(endIndex + 4);
+                  startIndex = buffer.indexOf('[bt]');
+                } else {
+                  break;
                 }
-                // rm processed thought from buffer
-                buffer = buffer.substring(endIndex + 4);
-                startIndex = buffer.indexOf('[bt]');
-              } else {
+              }
+
+              if (buffer.includes('[done]')) {
+                streamComplete = true;
+                clearSilenceTimer();
                 break;
               }
             }
 
-            if (buffer.includes('[done]')) {
-              streamComplete = true;
-              clearSilenceTimer();
-              break;
-            }
+            await processThoughtQueue(userText, thoughtResponsePairs, splitter);
           }
-
-          await processThoughtQueue(userText, thoughtResponsePairs, splitter);
         }
       }
     } catch (error) {

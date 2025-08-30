@@ -28,7 +28,7 @@ export interface UnifiedPipelineState {
   isPlaying: boolean;
   voices: Record<string, any>;
   currentMessageId: string | null;
-  thoughtProvider: "openai" | "gemini";
+  thoughtProvider: "openai" | "gemini" | "none";
 }
 
 export class UnifiedPipeline {
@@ -411,7 +411,7 @@ export class UnifiedPipeline {
     }
   }
 
-  setThoughtProvider(provider: "openai" | "gemini") {
+  setThoughtProvider(provider: "openai" | "gemini" | "none") {
     this.state.thoughtProvider = provider;
     if (this.worker) {
       this.worker.postMessage({ type: "set_thought_provider", provider });
