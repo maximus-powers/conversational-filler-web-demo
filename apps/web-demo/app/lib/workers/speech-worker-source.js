@@ -122,7 +122,7 @@ await llm.generate({
   do_sample: false,
 });
 let messages = [];
-let thoughtProvider = "openai"; // default to OpenAI
+let thoughtProvider = "gemini"; // default to Gemini
 if (!voice && tts.voices) {
   voice = Object.keys(tts.voices)[0] || "af_heart";
 }
@@ -328,7 +328,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
         streamComplete = true;
         await processThoughtQueue(userText, thoughtResponsePairs, splitter);
       } else {
-        const thoughtsEndpoint = thoughtProvider === 'gemini' ? '/api/chat-thoughts-gemini' : '/api/chat-thoughts';
+        const thoughtsEndpoint = '/api/chat-thoughts-gemini';
         console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
         
         const thoughtsResponse = await fetch(thoughtsEndpoint, {

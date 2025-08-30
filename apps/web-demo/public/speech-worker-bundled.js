@@ -65306,7 +65306,7 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
       do_sample: false
     });
     let messages = [];
-    let thoughtProvider = "openai";
+    let thoughtProvider = "gemini";
     if (!voice && tts.voices) {
       voice = Object.keys(tts.voices)[0] || "af_heart";
     }
@@ -65481,7 +65481,7 @@ ${thought}<|im_end|>
             streamComplete = true;
             await processThoughtQueue(userText, thoughtResponsePairs, splitter);
           } else {
-            const thoughtsEndpoint = thoughtProvider === "gemini" ? "/api/chat-thoughts-gemini" : "/api/chat-thoughts";
+            const thoughtsEndpoint = "/api/chat-thoughts-gemini";
             console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
             const thoughtsResponse = await fetch(thoughtsEndpoint, {
               method: "POST",
