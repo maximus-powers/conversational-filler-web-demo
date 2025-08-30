@@ -29,6 +29,7 @@ export interface UnifiedPipelineState {
   voices: Record<string, any>;
   currentMessageId: string | null;
   thoughtProvider: "gemini" | "none";
+  selectedModel: "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct";
 }
 
 export class UnifiedPipeline {
@@ -52,6 +53,7 @@ export class UnifiedPipeline {
       voices: {},
       currentMessageId: null,
       thoughtProvider: "gemini",
+      selectedModel: "maximuspowers/smollm-convo-filler-onnx-official",
     };
   }
 
@@ -415,6 +417,13 @@ export class UnifiedPipeline {
     this.state.thoughtProvider = provider;
     if (this.worker) {
       this.worker.postMessage({ type: "set_thought_provider", provider });
+    }
+  }
+
+  setModel(modelId: "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct") {
+    this.state.selectedModel = modelId;
+    if (this.worker) {
+      this.worker.postMessage({ type: "set_model", modelId });
     }
   }
 

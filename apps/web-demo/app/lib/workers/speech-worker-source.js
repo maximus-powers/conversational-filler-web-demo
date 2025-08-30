@@ -101,26 +101,61 @@ self.postMessage({
 });
 
 console.log('Initializing SmolLM.');
-const llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
+let llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
 
 // pipeline seemed to have a bug with loading the custom tokenizer
-const tokenizer = await AutoTokenizer.from_pretrained(llm_model_id, {
+let tokenizer = await AutoTokenizer.from_pretrained(llm_model_id, {
   dtype: "fp32",
   device: "webgpu",
 });
-const llm = await AutoModelForCausalLM.from_pretrained(llm_model_id, {
+let llm = await AutoModelForCausalLM.from_pretrained(llm_model_id, {
   dtype: "fp32", 
   device: "webgpu",
 });
 
 // needs to warm up with proper format and compile shaders (this is why we were getting such bad responses before)
 const warmupPrompt = "<|im_start|>user\nHello<|im_end|>\n<|im_start|>knowledge\n<|sil|><|im_end|>\n";
-const warmupInput = tokenizer(warmupPrompt);
+let warmupInput = tokenizer(warmupPrompt);
 await llm.generate({
   ...warmupInput,
   max_new_tokens: 10,
   do_sample: false,
 });
+
+async function switchModel(newModelId) {
+  console.log(`Switching to model: ${newModelId}`);
+  self.postMessage({ 
+    type: "info", 
+    message: `Loading model: ${newModelId}...`,
+    duration: "until_next"
+  });
+  
+  llm_model_id = newModelId;
+  
+  // Load new tokenizer and model
+  tokenizer = await AutoTokenizer.from_pretrained(llm_model_id, {
+    dtype: "fp32",
+    device: "webgpu",
+  });
+  llm = await AutoModelForCausalLM.from_pretrained(llm_model_id, {
+    dtype: "fp32", 
+    device: "webgpu",
+  });
+
+  // Warm up the new model
+  warmupInput = tokenizer(warmupPrompt);
+  await llm.generate({
+    ...warmupInput,
+    max_new_tokens: 10,
+    do_sample: false,
+  });
+  
+  self.postMessage({ 
+    type: "info", 
+    message: `Model ${newModelId} loaded successfully`
+  });
+  console.log(`Model switched to: ${newModelId}`);
+}
 let messages = [];
 let thoughtProvider = "gemini"; // default to Gemini
 if (!voice && tts.voices) {
@@ -479,6 +514,12 @@ self.onmessage = async (event) => {
     case "set_thought_provider":
       thoughtProvider = event.data.provider;
       console.log(`Thought provider set to: ${thoughtProvider}`);
+      return;
+
+    case "set_model":
+      const newModelId = event.data.modelId;
+      console.log(`Switching to model: ${newModelId}`);
+      switchModel(newModelId);
       return;
       
     case "playback_ended":

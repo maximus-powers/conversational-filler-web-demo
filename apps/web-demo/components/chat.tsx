@@ -33,6 +33,7 @@ export function Chat() {
     {},
   );
   const [thoughtProvider, setThoughtProvider] = useState<"gemini" | "none">("gemini");
+  const [selectedModel, setSelectedModel] = useState<"maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct">("maximuspowers/smollm-convo-filler-onnx-official");
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -261,6 +262,12 @@ export function Chat() {
     }
   }, [thoughtProvider]);
 
+  useEffect(() => {
+    if (selectedModel && pipelineRef.current) {
+      pipelineRef.current.setModel(selectedModel);
+    }
+  }, [selectedModel]);
+
   return (
     <div className="flex h-full w-full overflow-hidden">
       <Timeline
@@ -306,6 +313,17 @@ export function Chat() {
               >
                 <option value="gemini">Google (Gemini)</option>
                 <option value="none">None (SmolLM Only)</option>
+              </select>
+
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value as "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct")}
+                className="text-sm px-2 py-1 border rounded-md bg-background"
+                disabled={modelLoading}
+                title="Select SmolLM model"
+              >
+                <option value="maximuspowers/smollm-convo-filler-onnx-official">SmolLM Convo Filler</option>
+                <option value="HuggingFaceTB/SmolLM-360M-Instruct">SmolLM 360M Instruct</option>
               </select>
             </div>
 

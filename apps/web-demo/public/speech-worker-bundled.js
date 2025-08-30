@@ -65289,22 +65289,50 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
       message: "Whisper model loaded successfully"
     });
     console.log("Initializing SmolLM.");
-    const llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
-    const tokenizer = await __webpack_exports__AutoTokenizer.from_pretrained(llm_model_id, {
+    let llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
+    let tokenizer = await __webpack_exports__AutoTokenizer.from_pretrained(llm_model_id, {
       dtype: "fp32",
       device: "webgpu"
     });
-    const llm = await __webpack_exports__AutoModelForCausalLM.from_pretrained(llm_model_id, {
+    let llm = await __webpack_exports__AutoModelForCausalLM.from_pretrained(llm_model_id, {
       dtype: "fp32",
       device: "webgpu"
     });
     const warmupPrompt = "<|im_start|>user\nHello<|im_end|>\n<|im_start|>knowledge\n<|sil|><|im_end|>\n";
-    const warmupInput = tokenizer(warmupPrompt);
+    let warmupInput = tokenizer(warmupPrompt);
     await llm.generate({
       ...warmupInput,
       max_new_tokens: 10,
       do_sample: false
     });
+    async function switchModel(newModelId) {
+      console.log(`Switching to model: ${newModelId}`);
+      self.postMessage({
+        type: "info",
+        message: `Loading model: ${newModelId}...`,
+        duration: "until_next"
+      });
+      llm_model_id = newModelId;
+      tokenizer = await __webpack_exports__AutoTokenizer.from_pretrained(llm_model_id, {
+        dtype: "fp32",
+        device: "webgpu"
+      });
+      llm = await __webpack_exports__AutoModelForCausalLM.from_pretrained(llm_model_id, {
+        dtype: "fp32",
+        device: "webgpu"
+      });
+      warmupInput = tokenizer(warmupPrompt);
+      await llm.generate({
+        ...warmupInput,
+        max_new_tokens: 10,
+        do_sample: false
+      });
+      self.postMessage({
+        type: "info",
+        message: `Model ${newModelId} loaded successfully`
+      });
+      console.log(`Model switched to: ${newModelId}`);
+    }
     let messages = [];
     let thoughtProvider = "gemini";
     if (!voice && tts.voices) {
@@ -65599,6 +65627,11 @@ ${thought}<|im_end|>
         case "set_thought_provider":
           thoughtProvider = event.data.provider;
           console.log(`Thought provider set to: ${thoughtProvider}`);
+          return;
+        case "set_model":
+          const newModelId = event.data.modelId;
+          console.log(`Switching to model: ${newModelId}`);
+          switchModel(newModelId);
           return;
         case "playback_ended":
           isPlaying = false;
