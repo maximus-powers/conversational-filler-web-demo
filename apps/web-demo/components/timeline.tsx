@@ -22,6 +22,9 @@ export interface TimelineEvent {
   message: string;
   content: string;
   fullContent?: string;
+  duration?: number;
+  startTime?: number;
+  endTime?: number;
 }
 
 export function Timeline({

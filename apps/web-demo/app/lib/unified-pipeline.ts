@@ -126,6 +126,12 @@ export class UnifiedPipeline {
           break;
         case "transcription":
           this.handleTranscription(data.text);
+          this.config.onTimelineEvent?.(
+            "transcription",
+            "Whisper",
+            "Transcribed",
+            data,
+          );
           break;
         case "conversation_turn_start":
           this.state.currentMessageId = null;
@@ -133,7 +139,7 @@ export class UnifiedPipeline {
             "conversation-turn",
             "System",
             "New conversation turn",
-            "",
+            data,
           );
           break;
         case "immediate_response":
@@ -179,7 +185,79 @@ export class UnifiedPipeline {
             "tts-end",
             "TTS",
             "Speech complete",
-            data.text,
+            data,
+          );
+          break;
+        case "transcription_start":
+          this.config.onTimelineEvent?.(
+            "transcription-start",
+            "STT",
+            "Starting transcription",
+            data,
+          );
+          break;
+        case "inference_start":
+          this.config.onTimelineEvent?.(
+            "inference_start",
+            "SmolLM",
+            "Starting inference",
+            data,
+          );
+          break;
+        case "first_response":
+          this.config.onTimelineEvent?.(
+            "first_response",
+            "SmolLM",
+            "First response generated",
+            data,
+          );
+          break;
+        case "first_thought":
+          this.config.onTimelineEvent?.(
+            "first_thought",
+            "System",
+            "First thought received",
+            data,
+          );
+          break;
+        case "thought_generation_start":
+          this.config.onTimelineEvent?.(
+            "thought_generation_start",
+            "Thoughts",
+            "Starting thought generation",
+            data,
+          );
+          break;
+        case "thought_generation_end":
+          this.config.onTimelineEvent?.(
+            "thought_generation_end",
+            "Thoughts",
+            "Thought generation complete",
+            data,
+          );
+          break;
+        case "individual_thought_received":
+          this.config.onTimelineEvent?.(
+            "individual_thought_received",
+            "API",
+            "Individual thought received",
+            data,
+          );
+          break;
+        case "thought_processing_start":
+          this.config.onTimelineEvent?.(
+            "thought_processing_start",
+            "SmolLM",
+            "Processing thought",
+            data,
+          );
+          break;
+        case "thought_processing_end":
+          this.config.onTimelineEvent?.(
+            "thought_processing_end",
+            "SmolLM",
+            "Thought processing complete",
+            data,
           );
           break;
       }
@@ -224,12 +302,6 @@ export class UnifiedPipeline {
       `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
     );
     this.config.onTranscriptionReceived?.(text);
-    this.config.onTimelineEvent?.(
-      "transcription",
-      "Whisper",
-      "Transcribed",
-      text,
-    );
   }
 
   private handleImmediateResponse(data: any) {

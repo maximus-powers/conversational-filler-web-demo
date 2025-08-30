@@ -184,6 +184,17 @@ let isProcessingThought = false;
 let thoughtQueue = [];
 let streamComplete = false;
 
+// timeline tracking
+let conversationStartTime = null;
+let conversationTurnStartTime = null;
+let inferenceStartTime = null;
+let firstResponseTime = null;
+let firstThoughtTime = null;
+let sttStartTime = null;
+let sttEndTime = null;
+let ttsStartTime = null;
+let ttsEndTime = null;
+
 async function vad(buffer) {
   const input = new Tensor("float32", buffer, [1, buffer.length]);
   const { stateN, output } = await silero_vad({ input, sr, state });
@@ -195,6 +206,15 @@ async function vad(buffer) {
 }
 
 const processThought = async (thought, userInput, thoughtResponsePairs, splitter) => {
+  const thoughtProcessingStartTime = Date.now();
+  self.postMessage({ 
+    type: "thought_processing_start", 
+    thought,
+    timestamp: thoughtProcessingStartTime,
+    turnOffset: thoughtProcessingStartTime - conversationTurnStartTime,
+    turnStartTime: conversationTurnStartTime
+  });
+
   let contextPrompt = `<|im_start|>user\n${userInput}<|im_end|>\n`;
   
   for (const pair of thoughtResponsePairs) {
@@ -230,6 +250,16 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     let messageType;
     if (thought === "<|sil|>") {
       messageType = "filler_response";
+      if (!firstResponseTime && conversationStartTime) {
+        firstResponseTime = Date.now();
+        self.postMessage({ 
+          type: "first_response", 
+          timestamp: firstResponseTime,
+          timeFromStart: firstResponseTime - conversationStartTime,
+          turnOffset: firstResponseTime - conversationTurnStartTime,
+          turnStartTime: conversationTurnStartTime
+        });
+      }
     } else {
       messageType = "enhanced_response";
     }
@@ -238,6 +268,18 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     if (splitter) { // add to TTS if available
       splitter.push(thought === "" ? response : " " + response);
     }
+    
+    const thoughtProcessingEndTime = Date.now();
+    self.postMessage({ 
+      type: "thought_processing_end", 
+      thought,
+      response,
+      timestamp: thoughtProcessingEndTime,
+      turnOffset: thoughtProcessingEndTime - conversationTurnStartTime,
+      turnStartTime: conversationTurnStartTime,
+      duration: thoughtProcessingEndTime - thoughtProcessingStartTime,
+      startTime: thoughtProcessingStartTime
+    });
   }
   
   return response;
@@ -251,6 +293,17 @@ const processThoughtQueue = async (userInput, thoughtResponsePairs, splitter) =>
   while (thoughtQueue.length > 0) {
     const thought = thoughtQueue.shift();
     clearSilenceTimer();
+    
+    if (!firstThoughtTime && conversationStartTime) {
+      firstThoughtTime = Date.now();
+      self.postMessage({ 
+        type: "first_thought", 
+        timestamp: firstThoughtTime,
+        timeFromStart: firstThoughtTime - conversationStartTime,
+        turnOffset: firstThoughtTime - conversationTurnStartTime,
+        turnStartTime: conversationTurnStartTime
+      });
+    }
     
     self.postMessage({ type: "thought", thought, index: localThoughtIndex++, thoughtProvider });
     const thoughtResponse = await processThought(thought, userInput, thoughtResponsePairs, splitter);
@@ -293,17 +346,50 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   thoughtQueue = [];
   isProcessingThought = false;
   streamComplete = false;
-  self.postMessage({ type: "conversation_turn_start" });
+  
+  conversationStartTime = Date.now();
+  conversationTurnStartTime = conversationStartTime; 
+  inferenceStartTime = null;
+  firstResponseTime = null;
+  firstThoughtTime = null;
+  sttStartTime = null;
+  sttEndTime = null;
+  ttsStartTime = null;
+  ttsEndTime = null;
+  
+  self.postMessage({ 
+    type: "conversation_turn_start", 
+    timestamp: conversationStartTime,
+    turnStartTime: conversationTurnStartTime,
+    turnOffset: 0
+  });
 
   let userText = input;
   
   if (isVoiceMode) {
+    sttStartTime = Date.now();
+    self.postMessage({ 
+      type: "transcription_start", 
+      timestamp: sttStartTime,
+      turnOffset: sttStartTime - conversationTurnStartTime
+    });
+    
     userText = await transcriber(input).then(({ text }) => text.trim());
+    
+    sttEndTime = Date.now();
     if (["", "[BLANK_AUDIO]"].includes(userText)) {
       isPlaying = false;
       return;
     }
-    self.postMessage({ type: "transcription", text: userText });
+    self.postMessage({ 
+      type: "transcription", 
+      text: userText, 
+      timestamp: sttEndTime,
+      duration: sttEndTime - sttStartTime,
+      startTime: sttStartTime,
+      turnOffset: sttStartTime - conversationTurnStartTime,
+      turnStartTime: conversationTurnStartTime
+    });
   }
   
   messages.push({ role: "user", content: userText });
@@ -316,7 +402,14 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
     
     (async () => {
       let chunkCount = 0;
-      self.postMessage({ type: "tts_start", text: "Starting TTS" });
+      ttsStartTime = Date.now();
+      self.postMessage({ 
+        type: "tts_start", 
+        text: "Starting TTS", 
+        timestamp: ttsStartTime,
+        turnOffset: ttsStartTime - conversationTurnStartTime,
+        turnStartTime: conversationTurnStartTime
+      });
       
       try {
         for await (const chunk of stream) {
@@ -341,12 +434,29 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
       } catch (error) {
         console.error('Error in TTS stream:', error);
       }
-      self.postMessage({ type: "tts_end", text: "TTS complete" });
+      ttsEndTime = Date.now();
+      self.postMessage({ 
+        type: "tts_end", 
+        text: "TTS complete", 
+        timestamp: ttsEndTime,
+        turnOffset: ttsEndTime - conversationTurnStartTime,
+        turnStartTime: conversationTurnStartTime,
+        duration: ttsEndTime - ttsStartTime,
+        startTime: ttsStartTime
+      });
     })();
   }
 
   let thoughtResponsePairs = [];
   streamComplete = false;
+  
+  inferenceStartTime = Date.now();
+  self.postMessage({ 
+    type: "inference_start", 
+    timestamp: inferenceStartTime,
+    turnOffset: inferenceStartTime - conversationTurnStartTime,
+    turnStartTime: conversationTurnStartTime
+  });
   
   const immediateResponse = await processThought("<|sil|>", userText, [], splitter);
   if (immediateResponse) {
@@ -357,12 +467,48 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
       
       if (thoughtProvider === 'none') {
         console.log('Using local-only mode with silence tokens');
+        
+        const thoughtStartTime = Date.now();
+        self.postMessage({ 
+          type: "thought_generation_start", 
+          timestamp: thoughtStartTime,
+          turnOffset: thoughtStartTime - conversationTurnStartTime,
+          turnStartTime: conversationTurnStartTime
+        });
+        
         for (let i = 0; i < 4; i++) {
+          const silTokenTime = Date.now();
+          self.postMessage({ 
+            type: "individual_thought_received", 
+            thought: "<|sil|>",
+            timestamp: silTokenTime,
+            thoughtIndex: i,
+            apiRequestStartTime: thoughtStartTime,
+            duration: 0, // Immediate for local generation
+            turnOffset: silTokenTime - conversationTurnStartTime,
+            turnStartTime: conversationTurnStartTime
+          });
           thoughtQueue.push("<|sil|>"); // queue 4 sil tokens for smollm to process without thoughts
         }
         streamComplete = true;
         await processThoughtQueue(userText, thoughtResponsePairs, splitter);
+        
+        const thoughtEndTime = Date.now();
+        self.postMessage({ 
+          type: "thought_generation_end", 
+          timestamp: thoughtEndTime,
+          duration: thoughtEndTime - thoughtStartTime,
+          startTime: thoughtStartTime
+        });
       } else {
+        const thoughtStartTime = Date.now();
+        self.postMessage({ 
+          type: "thought_generation_start", 
+          timestamp: thoughtStartTime,
+          turnOffset: thoughtStartTime - conversationTurnStartTime,
+          turnStartTime: conversationTurnStartTime
+        });
+        
         const thoughtsEndpoint = '/api/chat-thoughts-gemini';
         console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
         
@@ -407,6 +553,19 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
                   const thought = buffer.substring(startIndex + 4, endIndex).trim();
                   if (thought && !thoughts.includes(thought)) {
                     thoughts.push(thought);
+                    
+                    const thoughtReceivedTime = Date.now();
+                    self.postMessage({ 
+                      type: "individual_thought_received", 
+                      thought,
+                      timestamp: thoughtReceivedTime,
+                      thoughtIndex: thoughts.length - 1,
+                      apiRequestStartTime: thoughtStartTime,
+                      duration: thoughtReceivedTime - thoughtStartTime,
+                      turnOffset: thoughtReceivedTime - conversationTurnStartTime,
+                      turnStartTime: conversationTurnStartTime
+                    });
+                    
                     thoughtQueue.push(thought);
                     processThoughtQueue(userText, thoughtResponsePairs, splitter);
                   }
@@ -428,6 +587,14 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
             await processThoughtQueue(userText, thoughtResponsePairs, splitter);
           }
         }
+        
+        const thoughtEndTime = Date.now();
+        self.postMessage({ 
+          type: "thought_generation_end", 
+          timestamp: thoughtEndTime,
+          duration: thoughtEndTime - thoughtStartTime,
+          startTime: thoughtStartTime
+        });
       }
     } catch (error) {
       console.warn("Failed to generate thoughts:", error);

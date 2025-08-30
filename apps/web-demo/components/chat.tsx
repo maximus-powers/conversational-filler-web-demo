@@ -7,6 +7,7 @@ import { ThemeToggle } from "./theme-toggle";
 import { UnifiedPipeline, AppMode } from "../app/lib/unified-pipeline";
 import { Timeline, TimelineEvent } from "./timeline";
 import { ModeSwitcher } from "./mode-switcher";
+import { StatsPanel, ConversationMetrics, ProcessSegment, ThoughtSegment } from "./stats-panel";
 
 interface Message {
   id: string;
@@ -34,12 +35,51 @@ export function Chat() {
   );
   const [thoughtProvider, setThoughtProvider] = useState<"gemini" | "none">("gemini");
   const [selectedModel, setSelectedModel] = useState<"maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct">("maximuspowers/smollm-convo-filler-onnx-official");
+  const [conversationMetrics, setConversationMetrics] = useState<ConversationMetrics | null>(null);
+  const [currentTurnStartTime, setCurrentTurnStartTime] = useState<number | null>(null);
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentMetricsRef = useRef<{
+    startTime: number | null;
+    firstResponseTime: number | null;
+    firstThoughtTime: number | null;
+    processSegments: ProcessSegment[];
+    thoughtSegments: ThoughtSegment[];
+    thoughtGenerationStart: number | null;
+    thoughtIndex: number;
+    activeSmolLMSegments: Map<string, ProcessSegment>;
+  }>({
+    startTime: null,
+    firstResponseTime: null,
+    firstThoughtTime: null,
+    processSegments: [],
+    thoughtSegments: [],
+    thoughtGenerationStart: null,
+    thoughtIndex: 0,
+    activeSmolLMSegments: new Map(),
+  });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const updateMetricsDisplay = () => {
+    const metrics = currentMetricsRef.current;
+    if (metrics.startTime && metrics.firstResponseTime) {
+      const timeToFirstResponse = metrics.firstResponseTime - metrics.startTime;
+      const timeToFirstThought = metrics.firstThoughtTime ? metrics.firstThoughtTime - metrics.startTime : 0;
+      
+      const newMetrics = {
+        timeToFirstResponse,
+        timeToFirstThought,
+        averageLatencyReduction: timeToFirstThought > 0 ? Math.max(0, timeToFirstThought - timeToFirstResponse) : 0,
+        processTimeline: [...metrics.processSegments],
+        thoughtTimeline: [...metrics.thoughtSegments]
+      };
+      
+      setConversationMetrics(newMetrics);
+    }
   };
   useEffect(() => {
     scrollToBottom();
@@ -49,16 +89,17 @@ export function Chat() {
     type: TimelineEvent["type"],
     model: TimelineEvent["model"],
     message: string,
-    content: string = "",
+    content: string | any = "",
   ) => {
+    const contentStr = typeof content === 'string' ? content : '';
     const event: TimelineEvent = {
       id: `${Date.now()}-${Math.random()}`,
       timestamp: Date.now(),
       type,
       model,
       message,
-      content: content.slice(0, 50) + (content.length > 50 ? "..." : ""),
-      fullContent: content,
+      content: contentStr.slice(0, 50) + (contentStr.length > 50 ? "..." : ""),
+      fullContent: contentStr,
     };
     setTimelineEvents((prev) => [...prev, event]);
   };
@@ -145,6 +186,160 @@ export function Chat() {
             message,
             content || "",
           );
+          
+          const now = Date.now();
+          const metrics = currentMetricsRef.current;
+          
+          switch (type) {
+            case "conversation-turn":
+              const eventData = content as any;
+              const turnStartTime = eventData?.turnStartTime || now;
+              metrics.startTime = turnStartTime;
+              metrics.firstResponseTime = null;
+              metrics.firstThoughtTime = null;
+              metrics.processSegments = [];
+              metrics.thoughtSegments = [];
+              metrics.thoughtGenerationStart = null;
+              metrics.thoughtIndex = 0;
+              metrics.activeSmolLMSegments.clear();
+              setCurrentTurnStartTime(turnStartTime);
+              setConversationMetrics(null);
+              break;
+              
+            case "transcription":
+              if (content && (content as any).startTime && (content as any).duration && (content as any).turnStartTime) {
+                const data = content as any;
+                const turnRelativeStart = data.turnStartTime + data.turnOffset;
+                metrics.processSegments.push({
+                  type: 'stt',
+                  startTime: turnRelativeStart,
+                  endTime: turnRelativeStart + data.duration,
+                  duration: data.duration,
+                  label: 'Speech-to-Text'
+                });
+                updateMetricsDisplay();
+              }
+              break;
+              
+            case "first_response":
+              if (content && (content as any).turnStartTime && (content as any).turnOffset) {
+                const data = content as any;
+                metrics.firstResponseTime = data.turnStartTime + data.turnOffset;
+              } else {
+                metrics.firstResponseTime = now;
+              }
+              updateMetricsDisplay();
+              break;
+              
+            case "first_thought":
+              if (content && (content as any).turnStartTime && (content as any).turnOffset) {
+                const data = content as any;
+                metrics.firstThoughtTime = data.turnStartTime + data.turnOffset;
+              } else {
+                metrics.firstThoughtTime = now;
+              }
+              updateMetricsDisplay();
+              break;
+              
+            case "tts-start":
+              const existingTTS = metrics.processSegments.find(seg => seg.type === 'tts');
+              if (!existingTTS && content && (content as any).turnStartTime && (content as any).turnOffset) {
+                const data = content as any;
+                const ttsStartTime = data.turnStartTime + data.turnOffset;
+                metrics.processSegments.push({
+                  type: 'tts',
+                  startTime: ttsStartTime,
+                  endTime: ttsStartTime,
+                  duration: 0,
+                  label: 'Text-to-Speech'
+                });
+                updateMetricsDisplay();
+              }
+              break;
+              
+            case "tts-end":
+              const ttsSegment = metrics.processSegments.find(seg => seg.type === 'tts');
+              if (ttsSegment && content && (content as any).duration && (content as any).turnStartTime && (content as any).turnOffset) {
+                const data = content as any;
+                ttsSegment.endTime = data.turnStartTime + data.turnOffset;
+                ttsSegment.duration = data.duration;
+                updateMetricsDisplay();
+              }
+              break;
+              
+            case "thought_generation_start":
+              if (content && (content as any).turnStartTime && (content as any).turnOffset) {
+                const data = content as any;
+                metrics.thoughtGenerationStart = data.turnStartTime + data.turnOffset;
+              } else {
+                metrics.thoughtGenerationStart = now;
+              }
+              break;
+              
+            case "thought_generation_end":
+              updateMetricsDisplay();
+              break;
+              
+            case "individual_thought_received":
+              if (content && (content as any).turnStartTime && (content as any).thoughtIndex !== undefined) {
+                const data = content as any;
+                const thoughtIndex = data.thoughtIndex;
+                const thoughtReceivedTime = data.turnStartTime + data.turnOffset;
+                
+                let segmentStartTime;
+                const thoughtApiDuration = data.duration || (thoughtReceivedTime - data.apiRequestStartTime);
+                
+                if (thoughtIndex === 0) {
+                  segmentStartTime = data.apiRequestStartTime;
+                } else {
+                  const previousThought = metrics.thoughtSegments.find(t => t.index === thoughtIndex - 1);
+                  segmentStartTime = previousThought ? previousThought.endTime : data.apiRequestStartTime;
+                }
+                
+                const newSegment = {
+                  startTime: segmentStartTime,
+                  endTime: segmentStartTime + thoughtApiDuration, 
+                  duration: thoughtApiDuration,
+                  index: thoughtIndex
+                };
+
+                metrics.thoughtSegments.push(newSegment);
+                updateMetricsDisplay();
+              }
+              break;
+              
+            case "thought_processing_start":
+              if (content && (content as any).thought && (content as any).turnStartTime && (content as any).turnOffset) {
+                const data = content as any;
+                const processingStartTime = data.turnStartTime + data.turnOffset;
+                const thoughtKey = data.thought + '_' + data.timestamp;
+                const segment: ProcessSegment = {
+                  type: 'smollm',
+                  startTime: processingStartTime,
+                  endTime: processingStartTime,
+                  duration: 0,
+                  label: `SmolLM: ${data.thought.slice(0, 20)}...`
+                };
+                metrics.activeSmolLMSegments.set(thoughtKey, segment);
+                updateMetricsDisplay();
+              }
+              break;
+              
+            case "thought_processing_end":
+              if (content && (content as any).thought && (content as any).startTime && (content as any).turnStartTime && (content as any).turnOffset) {
+                const data = content as any;
+                const thoughtKey = data.thought + '_' + data.startTime;
+                const segment = metrics.activeSmolLMSegments.get(thoughtKey);
+                if (segment) {
+                  segment.endTime = data.turnStartTime + data.turnOffset;
+                  segment.duration = data.duration;
+                  metrics.processSegments.push(segment);
+                  metrics.activeSmolLMSegments.delete(thoughtKey);
+                  updateMetricsDisplay();
+                }
+              }
+              break;
+          }
         },
       });
 
@@ -312,7 +507,7 @@ export function Chat() {
                 title="Select thought provider"
               >
                 <option value="gemini">Google (Gemini)</option>
-                <option value="none">None (SmolLM Only)</option>
+                <option value="none">None</option>
               </select>
 
               <select
@@ -361,6 +556,12 @@ export function Chat() {
             )}
           </div>
         </div>
+
+        {/* Stats Panel */}
+        <StatsPanel 
+          metrics={conversationMetrics}
+          conversationStartTime={currentTurnStartTime}
+        />
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-4 py-3 bg-background">
