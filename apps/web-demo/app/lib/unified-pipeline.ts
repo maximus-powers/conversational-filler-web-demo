@@ -17,6 +17,8 @@ export interface UnifiedPipelineConfig {
     model: string,
     message: string,
     content?: string,
+    eventTimestamp?: number,
+    thoughtData?: any
   ) => void;
 }
 
@@ -238,10 +240,21 @@ export class UnifiedPipeline {
           break;
         case "individual_thought_received":
           this.config.onTimelineEvent?.(
-            "individual_thought_received",
+            "thought_received",
             "API",
-            "Individual thought received",
-            data,
+            `Thought ${data.thoughtIndex + 1} received`,
+            data.thought,
+            data.turnStartTime + data.turnOffset,
+            {
+              thought: data.thought,
+              thoughtIndex: data.thoughtIndex,
+              timestamp: data.timestamp,
+              duration: data.duration,
+              apiRequestStartTime: data.apiRequestStartTime,
+              turnStartTime: data.turnStartTime,
+              turnOffset: data.turnOffset,
+              thoughtProvider: data.thoughtProvider || "unknown"
+            }
           );
           break;
         case "thought_processing_start":

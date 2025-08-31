@@ -25,6 +25,15 @@ export interface TimelineEvent {
   duration?: number;
   startTime?: number;
   endTime?: number;
+  // Unified thought event data
+  thoughtData?: {
+    thought: string;
+    thoughtIndex: number;
+    apiRequestStartTime: number;
+    turnStartTime: number;
+    turnOffset: number;
+    thoughtProvider: string;
+  };
 }
 
 export function Timeline({
@@ -47,6 +56,8 @@ export function Timeline({
       case "smollm-response":
         return <Bot className="h-3 w-3 text-blue-500" />;
       case "thought":
+        return <Brain className="h-3 w-3 text-green-500" />;
+      case "thought_received":
         return <Brain className="h-3 w-3 text-green-500" />;
       case "smollm-enhanced":
         return <Bot className="h-3 w-3 text-blue-500" />;
@@ -79,6 +90,8 @@ export function Timeline({
       case "smollm-response":
         return "border-blue-500 bg-blue-50 dark:bg-blue-950";
       case "thought":
+        return "border-green-500 bg-green-50 dark:bg-green-950";
+      case "thought_received":
         return "border-green-500 bg-green-50 dark:bg-green-950";
       case "smollm-enhanced":
         return "border-blue-500 bg-blue-50 dark:bg-blue-950";

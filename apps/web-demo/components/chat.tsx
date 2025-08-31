@@ -90,16 +90,19 @@ export function Chat() {
     model: TimelineEvent["model"],
     message: string,
     content: string | any = "",
+    eventTimestamp?: number,
+    thoughtData?: any
   ) => {
     const contentStr = typeof content === 'string' ? content : '';
     const event: TimelineEvent = {
       id: `${Date.now()}-${Math.random()}`,
-      timestamp: Date.now(),
+      timestamp: eventTimestamp || Date.now(),
       type,
       model,
       message,
       content: contentStr.slice(0, 50) + (contentStr.length > 50 ? "..." : ""),
       fullContent: contentStr,
+      thoughtData: thoughtData
     };
     setTimelineEvents((prev) => [...prev, event]);
   };
@@ -179,16 +182,60 @@ export function Chat() {
           }
         },
 
-        onTimelineEvent: (type, model, message, content) => {
+        onTimelineEvent: (type, model, message, content, eventTimestamp, thoughtData) => {
           addTimelineEvent(
             type as TimelineEvent["type"],
             model as TimelineEvent["model"],
             message,
             content || "",
+            eventTimestamp,
+            thoughtData
           );
           
           const now = Date.now();
           const metrics = currentMetricsRef.current;
+          
+          if (type === "thought_received" && thoughtData) {
+            const thoughtIndex = thoughtData.thoughtIndex;
+            const thoughtReceivedTime = thoughtData.turnStartTime + thoughtData.turnOffset;
+            
+            let segmentStartTime;
+            let actualDuration;
+            
+            if (thoughtIndex === 0) {
+              // first thought: submit api -> parsed thought 1
+              segmentStartTime = thoughtData.apiRequestStartTime;
+              actualDuration = thoughtReceivedTime - thoughtData.apiRequestStartTime;
+            } else {
+              const previousThought = metrics.thoughtSegments.find(t => t.index === thoughtIndex - 1);
+              if (previousThought) {
+                segmentStartTime = previousThought.endTime;
+                actualDuration = thoughtReceivedTime - segmentStartTime;
+                console.log(`Thought ${thoughtIndex}: Previous ended at ${previousThought.endTime}, current at ${thoughtReceivedTime}, duration: ${actualDuration}ms`);
+              } else {
+                segmentStartTime = thoughtData.apiRequestStartTime;
+                actualDuration = thoughtReceivedTime - segmentStartTime; // subsequent thoughts: last parse thought time -> next parsed thought time
+                console.log(`Thought ${thoughtIndex}: No previous thought found, using API start time`);
+              }
+            }
+            
+            if (actualDuration <= 0) {
+              console.warn(`Thought ${thoughtIndex} has invalid duration: ${actualDuration}ms, setting to 10ms`);
+              actualDuration = 10;
+            }
+            
+            const newSegment = {
+              startTime: segmentStartTime,
+              endTime: thoughtReceivedTime,
+              duration: actualDuration,
+              index: thoughtIndex
+            };
+
+            metrics.thoughtSegments.push(newSegment);
+            updateMetricsDisplay();
+            return; 
+          }
+          
           
           switch (type) {
             case "conversation-turn":
@@ -225,6 +272,18 @@ export function Chat() {
               if (content && (content as any).turnStartTime && (content as any).turnOffset) {
                 const data = content as any;
                 metrics.firstResponseTime = data.turnStartTime + data.turnOffset;
+                
+                const fillerResponseTime = data.turnStartTime + data.turnOffset;
+                const fillerSegment = {
+                  type: 'smollm' as const,
+                  startTime: metrics.startTime || fillerResponseTime, 
+                  endTime: fillerResponseTime,
+                  duration: fillerResponseTime - (metrics.startTime || fillerResponseTime),
+                  label: 'SmolLM: Immediate Response'
+                };
+                if (fillerSegment.duration > 0) {
+                  metrics.processSegments.push(fillerSegment);
+                }
               } else {
                 metrics.firstResponseTime = now;
               }
@@ -280,33 +339,6 @@ export function Chat() {
               updateMetricsDisplay();
               break;
               
-            case "individual_thought_received":
-              if (content && (content as any).turnStartTime && (content as any).thoughtIndex !== undefined) {
-                const data = content as any;
-                const thoughtIndex = data.thoughtIndex;
-                const thoughtReceivedTime = data.turnStartTime + data.turnOffset;
-                
-                let segmentStartTime;
-                const thoughtApiDuration = data.duration || (thoughtReceivedTime - data.apiRequestStartTime);
-                
-                if (thoughtIndex === 0) {
-                  segmentStartTime = data.apiRequestStartTime;
-                } else {
-                  const previousThought = metrics.thoughtSegments.find(t => t.index === thoughtIndex - 1);
-                  segmentStartTime = previousThought ? previousThought.endTime : data.apiRequestStartTime;
-                }
-                
-                const newSegment = {
-                  startTime: segmentStartTime,
-                  endTime: segmentStartTime + thoughtApiDuration, 
-                  duration: thoughtApiDuration,
-                  index: thoughtIndex
-                };
-
-                metrics.thoughtSegments.push(newSegment);
-                updateMetricsDisplay();
-              }
-              break;
               
             case "thought_processing_start":
               if (content && (content as any).thought && (content as any).turnStartTime && (content as any).turnOffset) {
