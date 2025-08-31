@@ -3,6 +3,7 @@
 import React from "react";
 import { Clock, Zap, TrendingDown } from "lucide-react";
 import { Tooltip } from "./tooltip";
+import { EventData, EventName } from "../app/lib/event-tracker";
 
 export interface ConversationMetrics {
   timeToFirstResponse: number;
@@ -41,12 +42,127 @@ const getProcessColor = (type: ProcessSegment['type']) => {
 };
 
 export function StatsPanel({
-  metrics,
+  eventData,
   conversationStartTime,
 }: {
-  metrics: ConversationMetrics | null;
+  eventData: EventData | null;
   conversationStartTime: number | null;
 }) {
+  const metrics = React.useMemo((): ConversationMetrics | null => {
+    if (!eventData?.turns?.length || !conversationStartTime) return null;
+    
+    const allEvents = eventData.turns.flatMap(turn => 
+      turn.timeline.map(event => ({
+        ...event,
+        timestamp: new Date(event.timestamp).getTime()
+      }))
+    ).sort((a, b) => a.timestamp - b.timestamp);
+    
+    // calc metrics
+    const firstResponse = allEvents.find(e => e.eventName === "LocalLMResponse");
+    const firstThought = allEvents.find(e => e.eventName === "ThoughtApiFirstToken");
+    const timeToFirstResponse = firstResponse ? firstResponse.timestamp - conversationStartTime : 0;
+    const timeToFirstThought = firstThought ? firstThought.timestamp - conversationStartTime : 0;
+    
+    const processTimeline: ProcessSegment[] = [];
+    
+    // STT segments
+    const sttStarts = allEvents.filter(e => e.eventName === "STTStart");
+    const sttEnds = allEvents.filter(e => e.eventName === "STTEnd");
+    sttStarts.forEach((start) => {
+      const end = sttEnds.find(endEvent => endEvent.timestamp > start.timestamp);
+      if (end) {
+        processTimeline.push({
+          type: 'stt',
+          startTime: start.timestamp,
+          endTime: end.timestamp,
+          duration: end.timestamp - start.timestamp,
+          label: 'Speech-to-Text'
+        });
+        const endIndex = sttEnds.indexOf(end);
+        if (endIndex > -1) {
+          sttEnds.splice(endIndex, 1);
+        }
+      }
+    });
+    
+    // smollm segments
+    const lmStarts = allEvents.filter(e => e.eventName === "LocalLMSubmit");
+    const lmEnds = allEvents.filter(e => e.eventName === "LocalLMResponse");
+    const uniqueLmStarts = lmStarts.filter((start, index, arr) => {
+      return index === 0 || start.timestamp !== arr[index - 1].timestamp;
+    }); // dedupe
+    const availableLmEnds = [...lmEnds];
+    uniqueLmStarts.forEach((start) => {
+      const endIndex = availableLmEnds.findIndex(endEvent => endEvent.timestamp > start.timestamp);
+      if (endIndex !== -1) {
+        const end = availableLmEnds[endIndex];
+        processTimeline.push({
+          type: 'smollm',
+          startTime: start.timestamp,
+          endTime: end.timestamp,
+          duration: end.timestamp - start.timestamp,
+          label: 'SmolLM Processing'
+        });
+        availableLmEnds.splice(endIndex, 1);
+      }
+    });
+    
+    // TTS segments
+    const ttsStarts = allEvents.filter(e => e.eventName === "TTSStart");
+    const ttsEnds = allEvents.filter(e => e.eventName === "TTSEnd");
+    ttsStarts.forEach((start) => {
+      const end = ttsEnds.find(endEvent => endEvent.timestamp > start.timestamp);
+      if (end) {
+        processTimeline.push({
+          type: 'tts',
+          startTime: start.timestamp,
+          endTime: end.timestamp,
+          duration: end.timestamp - start.timestamp,
+          label: 'Text-to-Speech'
+        });
+        const endIndex = ttsEnds.indexOf(end);
+        if (endIndex > -1) {
+          ttsEnds.splice(endIndex, 1);
+        }
+      }
+    });
+    
+    // thought segments
+    const thoughtTimeline: ThoughtSegment[] = [];
+    const thoughtSubmit = allEvents.find(e => e.eventName === "ThoughtApiSubmit");
+    const thoughtFirstToken = allEvents.find(e => e.eventName === "ThoughtApiFirstToken");
+    if (thoughtSubmit && thoughtFirstToken) {
+      thoughtTimeline.push({
+        startTime: thoughtSubmit.timestamp,
+        endTime: thoughtFirstToken.timestamp,
+        duration: thoughtFirstToken.timestamp - thoughtSubmit.timestamp,
+        index: 0
+      });
+    }
+    const thoughtsParsed = allEvents.filter(e => e.eventName === "ThoughtParsed");
+    let lastThoughtTime = thoughtFirstToken?.timestamp || thoughtSubmit?.timestamp || conversationStartTime;
+    thoughtsParsed.forEach((thought, i) => {
+      if (lastThoughtTime && thought.timestamp > lastThoughtTime) {
+        thoughtTimeline.push({
+          startTime: lastThoughtTime,
+          endTime: thought.timestamp,
+          duration: thought.timestamp - lastThoughtTime,
+          index: thoughtFirstToken ? i + 1 : i
+        });
+      }
+      lastThoughtTime = thought.timestamp;
+    });
+    
+    return {
+      timeToFirstResponse,
+      timeToFirstThought,
+      averageLatencyReduction: timeToFirstThought > 0 ? Math.max(0, timeToFirstThought - timeToFirstResponse) : 0,
+      processTimeline: processTimeline.sort((a, b) => a.startTime - b.startTime),
+      thoughtTimeline: thoughtTimeline.sort((a, b) => a.startTime - b.startTime)
+    };
+  }, [eventData, conversationStartTime]);
+  
   if (!metrics || !conversationStartTime) {
     return (
       <div className="bg-card border-b px-6 py-4">
@@ -105,67 +221,76 @@ export function StatsPanel({
         </div>
       </div>
 
-      {/* Timelines */}
-      <div className="space-y-1">
-        {/* Process Timeline */}
-        <div className="relative h-6 bg-muted rounded overflow-hidden">
-          {metrics.processTimeline.map((segment, index) => {
+      {/* Waterfall Trace */}
+      <div className="space-y-0">
+        <div className="text-xs font-medium text-muted-foreground mb-2">Processing Waterfall</div>
+        
+        {(() => {
+          const allSegments = [
+            ...metrics.processTimeline.map(s => ({...s, category: 'process'})),
+            ...metrics.thoughtTimeline.map(t => ({
+              type: 'thought',
+              startTime: t.startTime,
+              endTime: t.endTime,
+              duration: t.duration,
+              label: t.index === 0 ? 'API Latency' : `Thought ${t.index}`,
+              category: 'thought',
+              index: t.index
+            }))
+          ].sort((a, b) => a.startTime - b.startTime);
+
+          return allSegments.map((segment, index) => {
             const left = ((segment.startTime - conversationStartTime) / totalDuration) * 100;
             const width = (segment.duration / totalDuration) * 100;
             const startOffset = segment.startTime - conversationStartTime;
             const endOffset = segment.endTime - conversationStartTime;
             
-            const tooltipContent = `${segment.label}
-Duration: ${formatTime(segment.duration)}
-Start: ${formatTime(startOffset)} from conversation start
-End: ${formatTime(endOffset)} from conversation start
-Type: ${segment.type.toUpperCase()}`;
+            let colorClass = '';
+            if (segment.category === 'thought') {
+              if (segment.label === 'API Latency') {
+                colorClass = 'bg-red-500';
+              } else {
+                colorClass = 'bg-green-500';
+              }
+            } else {
+              colorClass = getProcessColor(segment.type as ProcessSegment['type']);
+            }
+            
+            const tooltipContent = `${segment.label}${segment.category === 'process' ? ` (${segment.type.toUpperCase()})` : ''}
+Duration: ${formatTime(segment.duration)}`;
             
             return (
-              <Tooltip key={`${segment.type}-${index}`} content={tooltipContent} preserveChildPositioning={true}>
-                <div
-                  className={`absolute top-0 h-full ${getProcessColor(segment.type)} opacity-80 hover:opacity-100 cursor-help transition-opacity`}
-                  style={{
-                    left: `${left}%`,
-                    width: `${width}%`,
-                  }}
-                />
-              </Tooltip>
+              <div key={`waterfall-${index}`} className="flex items-center gap-2">
+                <span className="text-xs w-36 text-muted-foreground truncate" title={segment.label}>
+                  {segment.label}
+                </span>
+                <div className="flex-1 relative h-3 bg-muted rounded overflow-hidden">
+                  <Tooltip content={tooltipContent} preserveChildPositioning={true}>
+                    <div
+                      className={`absolute top-0 h-full ${colorClass} opacity-80 hover:opacity-100 cursor-help transition-opacity`}
+                      style={{
+                        left: `${left}%`,
+                        width: `${width}%`,
+                      }}
+                    />
+                  </Tooltip>
+                  {index > 0 && (
+                    <div 
+                      className="absolute top-1/2 h-0.5 bg-muted-foreground/30"
+                      style={{
+                        left: '0%',
+                        width: `${left}%`,
+                        transform: 'translateY(-50%)'
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
             );
-          })}
-        </div>
+          });
+        })()}
 
-        {/* Thought Timeline */}
-        {metrics.thoughtTimeline.length > 0 && (
-          <div className="relative h-4 bg-muted/50 rounded overflow-hidden">
-            {metrics.thoughtTimeline.map((thought, index) => {
-              const left = ((thought.startTime - conversationStartTime) / totalDuration) * 100;
-              const width = (thought.duration / totalDuration) * 100;
-              const startOffset = thought.startTime - conversationStartTime;
-              const endOffset = thought.endTime - conversationStartTime;
-              
-              const tooltipContent = `Thought ${thought.index + 1}
-Duration: ${formatTime(thought.duration)}
-Start: ${formatTime(startOffset)} from conversation start
-End: ${formatTime(endOffset)} from conversation start
-API Latency: ${formatTime(thought.duration)}`;
-              
-              return (
-                <Tooltip key={index} content={tooltipContent} preserveChildPositioning={true}>
-                  <div
-                    className="absolute top-0 h-full bg-green-500 opacity-60 hover:opacity-80 cursor-help transition-opacity"
-                    style={{
-                      left: `${left}%`,
-                      width: `${width}%`,
-                    }}
-                  />
-                </Tooltip>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Consolidated Color Key */}
+        {/* Color Key */}
         <div className="flex items-center gap-4 mt-2 text-xs">
           <div className="flex items-center gap-1">
             <div className="w-3 h-3 bg-purple-500 rounded-sm"></div>

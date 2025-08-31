@@ -65375,7 +65375,7 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
     const processThought = async (thought, userInput, thoughtResponsePairs, splitter) => {
       const thoughtProcessingStartTime = Date.now();
       self.postMessage({
-        type: "thought_processing_start",
+        type: "smollm_submit",
         thought,
         timestamp: thoughtProcessingStartTime,
         turnOffset: thoughtProcessingStartTime - conversationTurnStartTime,
@@ -65412,29 +65412,23 @@ ${thought}<|im_end|>
       console.log("DEBUG: Generated text:", generatedText);
       response = generatedText.replace(/<\|im_start\|>/g, "").replace(/<\|im_end\|>/g, "").replace(/^assistant\s*/i, "").trim().split("\n")[0];
       if (response) {
-        let messageType;
-        if (thought === "<|sil|>") {
-          messageType = "filler_response";
-          if (!firstResponseTime && conversationStartTime) {
-            firstResponseTime = Date.now();
-            self.postMessage({
-              type: "first_response",
-              timestamp: firstResponseTime,
-              timeFromStart: firstResponseTime - conversationStartTime,
-              turnOffset: firstResponseTime - conversationTurnStartTime,
-              turnStartTime: conversationTurnStartTime
-            });
-          }
-        } else {
-          messageType = "enhanced_response";
+        if (thought === "<|sil|>" && !firstResponseTime && conversationStartTime) {
+          firstResponseTime = Date.now();
+          self.postMessage({
+            type: "immediate_response",
+            response,
+            timestamp: firstResponseTime,
+            timeFromStart: firstResponseTime - conversationStartTime,
+            turnOffset: firstResponseTime - conversationTurnStartTime,
+            turnStartTime: conversationTurnStartTime
+          });
         }
-        self.postMessage({ type: messageType, response, thoughtProvider });
         if (splitter) {
           splitter.push(thought === "" ? response : " " + response);
         }
         const thoughtProcessingEndTime = Date.now();
         self.postMessage({
-          type: "thought_processing_end",
+          type: "smollm_response",
           thought,
           response,
           timestamp: thoughtProcessingEndTime,
@@ -65518,7 +65512,7 @@ ${thought}<|im_end|>
       if (isVoiceMode) {
         sttStartTime = Date.now();
         self.postMessage({
-          type: "transcription_start",
+          type: "stt_start",
           timestamp: sttStartTime,
           turnOffset: sttStartTime - conversationTurnStartTime
         });
@@ -65529,7 +65523,7 @@ ${thought}<|im_end|>
           return;
         }
         self.postMessage({
-          type: "transcription",
+          type: "stt_end",
           text: userText,
           timestamp: sttEndTime,
           duration: sttEndTime - sttStartTime,
@@ -65589,12 +65583,6 @@ ${thought}<|im_end|>
       let thoughtResponsePairs = [];
       streamComplete = false;
       inferenceStartTime = Date.now();
-      self.postMessage({
-        type: "inference_start",
-        timestamp: inferenceStartTime,
-        turnOffset: inferenceStartTime - conversationTurnStartTime,
-        turnStartTime: conversationTurnStartTime
-      });
       let thoughtsPromise = null;
       let thoughtStartTime = null;
       try {
@@ -65603,7 +65591,7 @@ ${thought}<|im_end|>
           console.log("Using local-only mode with silence tokens");
           thoughtStartTime = Date.now();
           self.postMessage({
-            type: "thought_generation_start",
+            type: "thought_submit",
             timestamp: thoughtStartTime,
             turnOffset: thoughtStartTime - conversationTurnStartTime,
             turnStartTime: conversationTurnStartTime
@@ -65612,7 +65600,7 @@ ${thought}<|im_end|>
             for (let i3 = 0; i3 < 4; i3++) {
               const silTokenTime = Date.now();
               self.postMessage({
-                type: "individual_thought_received",
+                type: "thought_response",
                 thought: "<|sil|>",
                 timestamp: silTokenTime,
                 thoughtIndex: i3,
@@ -65636,7 +65624,7 @@ ${thought}<|im_end|>
         } else {
           thoughtStartTime = Date.now();
           self.postMessage({
-            type: "thought_generation_start",
+            type: "thought_submit",
             timestamp: thoughtStartTime,
             turnOffset: thoughtStartTime - conversationTurnStartTime,
             turnStartTime: conversationTurnStartTime
@@ -65671,6 +65659,7 @@ ${thought}<|im_end|>
               const decoder = new TextDecoder();
               let buffer = "";
               const thoughts = [];
+              let firstTokenReceived = false;
               while (true) {
                 const { done, value } = await reader.read();
                 if (done) {
@@ -65679,6 +65668,16 @@ ${thought}<|im_end|>
                 }
                 const chunk = decoder.decode(value, { stream: true });
                 buffer += chunk;
+                if (!firstTokenReceived && buffer.includes("[first_token]")) {
+                  self.postMessage({
+                    type: "first_thought_token_received",
+                    timestamp: Date.now(),
+                    turnOffset: Date.now() - conversationTurnStartTime,
+                    turnStartTime: conversationTurnStartTime
+                  });
+                  firstTokenReceived = true;
+                  buffer = buffer.replace("[first_token]", "");
+                }
                 let startIndex = buffer.indexOf("[bt]");
                 while (startIndex !== -1) {
                   const endIndex = buffer.indexOf("[et]", startIndex);
@@ -65688,7 +65687,7 @@ ${thought}<|im_end|>
                       thoughts.push(thought);
                       const thoughtReceivedTime = Date.now();
                       self.postMessage({
-                        type: "individual_thought_received",
+                        type: "thought_response",
                         thought,
                         timestamp: thoughtReceivedTime,
                         thoughtIndex: thoughts.length - 1,

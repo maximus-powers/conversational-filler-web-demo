@@ -207,13 +207,13 @@ async function vad(buffer) {
 
 const processThought = async (thought, userInput, thoughtResponsePairs, splitter) => {
   const thoughtProcessingStartTime = Date.now();
-  self.postMessage({ 
-    type: "thought_processing_start", 
-    thought,
-    timestamp: thoughtProcessingStartTime,
-    turnOffset: thoughtProcessingStartTime - conversationTurnStartTime,
-    turnStartTime: conversationTurnStartTime
-  });
+      self.postMessage({ 
+      type: "smollm_submit", 
+      thought,
+      timestamp: thoughtProcessingStartTime,
+      turnOffset: thoughtProcessingStartTime - conversationTurnStartTime,
+      turnStartTime: conversationTurnStartTime
+    });
 
   let contextPrompt = `<|im_start|>user\n${userInput}<|im_end|>\n`;
   
@@ -247,31 +247,25 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     .split("\n")[0];
 
   if (response) {
-    let messageType;
-    if (thought === "<|sil|>") {
-      messageType = "filler_response";
-      if (!firstResponseTime && conversationStartTime) {
-        firstResponseTime = Date.now();
-        self.postMessage({ 
-          type: "first_response", 
-          timestamp: firstResponseTime,
-          timeFromStart: firstResponseTime - conversationStartTime,
-          turnOffset: firstResponseTime - conversationTurnStartTime,
-          turnStartTime: conversationTurnStartTime
-        });
-      }
-    } else {
-      messageType = "enhanced_response";
+    if (thought === "<|sil|>" && !firstResponseTime && conversationStartTime) {
+      firstResponseTime = Date.now();
+      self.postMessage({ 
+        type: "immediate_response", 
+        response,
+        timestamp: firstResponseTime,
+        timeFromStart: firstResponseTime - conversationStartTime,
+        turnOffset: firstResponseTime - conversationTurnStartTime,
+        turnStartTime: conversationTurnStartTime
+      });
     }
-    
-    self.postMessage({ type: messageType, response, thoughtProvider });
+
     if (splitter) { // add to TTS if available
       splitter.push(thought === "" ? response : " " + response);
     }
     
     const thoughtProcessingEndTime = Date.now();
     self.postMessage({ 
-      type: "thought_processing_end", 
+      type: "smollm_response", 
       thought,
       response,
       timestamp: thoughtProcessingEndTime,
@@ -369,7 +363,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   if (isVoiceMode) {
     sttStartTime = Date.now();
     self.postMessage({ 
-      type: "transcription_start", 
+      type: "stt_start", 
       timestamp: sttStartTime,
       turnOffset: sttStartTime - conversationTurnStartTime
     });
@@ -382,7 +376,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
       return;
     }
     self.postMessage({ 
-      type: "transcription", 
+      type: "stt_end", 
       text: userText, 
       timestamp: sttEndTime,
       duration: sttEndTime - sttStartTime,
@@ -451,12 +445,6 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   streamComplete = false;
   
   inferenceStartTime = Date.now();
-  self.postMessage({ 
-    type: "inference_start", 
-    timestamp: inferenceStartTime,
-    turnOffset: inferenceStartTime - conversationTurnStartTime,
-    turnStartTime: conversationTurnStartTime
-  });
   
   let thoughtsPromise = null;
   let thoughtStartTime = null;
@@ -469,7 +457,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
       
       thoughtStartTime = Date.now();
       self.postMessage({ 
-        type: "thought_generation_start", 
+        type: "thought_submit", 
         timestamp: thoughtStartTime,
         turnOffset: thoughtStartTime - conversationTurnStartTime,
         turnStartTime: conversationTurnStartTime
@@ -479,7 +467,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
         for (let i = 0; i < 4; i++) {
           const silTokenTime = Date.now();
           self.postMessage({ 
-            type: "individual_thought_received", 
+            type: "thought_response", 
             thought: "<|sil|>",
             timestamp: silTokenTime,
             thoughtIndex: i,
@@ -503,7 +491,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
     } else {
       thoughtStartTime = Date.now();
       self.postMessage({ 
-        type: "thought_generation_start", 
+        type: "thought_submit", 
         timestamp: thoughtStartTime,
         turnOffset: thoughtStartTime - conversationTurnStartTime,
         turnStartTime: conversationTurnStartTime
@@ -544,6 +532,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
             const decoder = new TextDecoder();
             let buffer = '';
             const thoughts = [];
+            let firstTokenReceived = false;
 
             while (true) {
               const { done, value } = await reader.read();
@@ -554,6 +543,17 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
               
               const chunk = decoder.decode(value, { stream: true });
               buffer += chunk;
+              
+              if (!firstTokenReceived && buffer.includes('[first_token]')) {
+                self.postMessage({
+                  type: "first_thought_token_received",
+                  timestamp: Date.now(),
+                  turnOffset: Date.now() - conversationTurnStartTime,
+                  turnStartTime: conversationTurnStartTime
+                });
+                firstTokenReceived = true;
+                buffer = buffer.replace('[first_token]', '');
+              }
 
               // extract thoughts from buffer with [bt] and [et] markers
               let startIndex = buffer.indexOf('[bt]');
@@ -566,7 +566,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
                     
                     const thoughtReceivedTime = Date.now();
                     self.postMessage({ 
-                      type: "individual_thought_received", 
+                      type: "thought_response", 
                       thought,
                       timestamp: thoughtReceivedTime,
                       thoughtIndex: thoughts.length - 1,

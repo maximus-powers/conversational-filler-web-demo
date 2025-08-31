@@ -12,108 +12,120 @@ import {
   Minimize2,
   Mic,
   MicOff,
+  User,
 } from "lucide-react";
+import { EventData, TimelineEvent, EventName } from "../app/lib/event-tracker";
 
-export interface TimelineEvent {
+interface TimelineDisplayEvent {
   id: string;
   timestamp: number;
-  type: string;
-  model: string;
+  type: EventName;
   message: string;
   content: string;
   fullContent?: string;
-  duration?: number;
-  startTime?: number;
-  endTime?: number;
-  // Unified thought event data
-  thoughtData?: {
-    thought: string;
-    thoughtIndex: number;
-    apiRequestStartTime: number;
-    turnStartTime: number;
-    turnOffset: number;
-    thoughtProvider: string;
-  };
 }
 
 export function Timeline({
-  events,
+  eventData,
   conversationStartTime,
   mode,
 }: {
-  events: TimelineEvent[];
+  eventData: EventData | null;
   conversationStartTime: number | null;
   mode?: "text" | "voice";
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  
+  const getEventMessage = (eventName: EventName, event: TimelineEvent): string => {
+    switch (eventName) {
+      case "VoiceDetectionStart": return "Voice detected";
+      case "VoiceDetectionEnd": return "Voice ended";
+      case "STTStart": return "Transcribing speech";
+      case "STTEnd": return "Speech transcribed";
+      case "UserInputReceived": return "User input received";
+      case "ThoughtApiSubmit": return "Requesting thoughts";
+      case "ThoughtApiFirstToken": return "First thought token";
+      case "LocalLMSubmit": return "Processing with model";
+      case "LocalLMResponse": return "Model response";
+      case "TTSStart": return "Starting speech";
+      case "TTSEnd": return "Speech complete";
+      case "ThoughtParsed": return "Thought received";
+      default: return eventName;
+    }
+  };
+  
+  const events: TimelineDisplayEvent[] = React.useMemo(() => {
+    if (!eventData?.turns?.length) return [];
+    const allEvents: TimelineDisplayEvent[] = [];
+    eventData.turns.forEach((turn, turnIndex) => {
+      turn.timeline.forEach((event, eventIndex) => {
+        const timestamp = new Date(event.timestamp).getTime();
+        allEvents.push({
+          id: `${turnIndex}-${eventIndex}`,
+          timestamp,
+          type: event.eventName,
+          message: getEventMessage(event.eventName, event),
+          content: event.text || event.prompt || event.response || "",
+          fullContent: event.text || event.prompt || event.response || ""
+        });
+      });
+    });
+    
+    return allEvents.sort((a, b) => a.timestamp - b.timestamp);
+  }, [eventData]);
+  
   const getRelativeTime = (timestamp: number) => {
     if (!conversationStartTime) return "0ms";
     return `${timestamp - conversationStartTime}ms`;
   };
 
-  const getEventIcon = (type: TimelineEvent["type"]) => {
+  const getEventIcon = (type: EventName) => {
     switch (type) {
-      case "smollm-response":
-        return <Bot className="h-3 w-3 text-blue-500" />;
-      case "thought":
-        return <Brain className="h-3 w-3 text-green-500" />;
-      case "thought_received":
-        return <Brain className="h-3 w-3 text-green-500" />;
-      case "smollm-enhanced":
-        return <Bot className="h-3 w-3 text-blue-500" />;
-      case "tts-start":
-      case "tts-end":
-        return <Volume2 className="h-3 w-3 text-orange-500" />;
-      case "model-loading":
-        return <DownloadCloud className="h-3 w-3 text-yellow-500" />;
-      case "model-ready":
-        return <CheckCircle className="h-3 w-3 text-green-600" />;
-      case "transcription":
-        return <Brain className="h-3 w-3 text-purple-500" />;
-      case "recording-start":
+      case "VoiceDetectionStart":
         return <Mic className="h-3 w-3 text-red-500" />;
-      case "recording-end":
+      case "VoiceDetectionEnd":
         return <MicOff className="h-3 w-3 text-gray-500" />;
-      case "mode-switch":
-        return <Clock className="h-3 w-3 text-indigo-500" />;
-      case "user-input":
-        return <Brain className="h-3 w-3 text-cyan-500" />;
-      case "error":
-        return <Clock className="h-3 w-3 text-red-600" />;
+      case "STTStart":
+      case "STTEnd":
+        return <Brain className="h-3 w-3 text-purple-500" />;
+      case "UserInputReceived":
+        return <User className="h-3 w-3 text-cyan-500" />;
+      case "ThoughtApiSubmit":
+      case "ThoughtApiFirstToken":
+      case "ThoughtParsed":
+        return <Brain className="h-3 w-3 text-green-500" />;
+      case "LocalLMSubmit":
+      case "LocalLMResponse":
+        return <Bot className="h-3 w-3 text-blue-500" />;
+      case "TTSStart":
+      case "TTSEnd":
+        return <Volume2 className="h-3 w-3 text-orange-500" />;
       default:
         return <Clock className="h-3 w-3 text-gray-500" />;
     }
   };
 
-  const getEventColor = (type: TimelineEvent["type"]) => {
+  const getEventColor = (type: EventName) => {
     switch (type) {
-      case "smollm-response":
-        return "border-blue-500 bg-blue-50 dark:bg-blue-950";
-      case "thought":
-        return "border-green-500 bg-green-50 dark:bg-green-950";
-      case "thought_received":
-        return "border-green-500 bg-green-50 dark:bg-green-950";
-      case "smollm-enhanced":
-        return "border-blue-500 bg-blue-50 dark:bg-blue-950";
-      case "tts-start":
-      case "tts-end":
-        return "border-orange-500 bg-orange-50 dark:bg-orange-950";
-      case "model-loading":
-        return "border-yellow-500 bg-yellow-50 dark:bg-yellow-950";
-      case "model-ready":
-        return "border-green-600 bg-green-50 dark:bg-green-950";
-      case "transcription":
-        return "border-purple-500 bg-purple-50 dark:bg-purple-950";
-      case "recording-start":
+      case "VoiceDetectionStart":
         return "border-red-500 bg-red-50 dark:bg-red-950";
-      case "recording-end":
+      case "VoiceDetectionEnd":
         return "border-gray-500 bg-gray-50 dark:bg-gray-950";
-      case "mode-switch":
-        return "border-indigo-500 bg-indigo-50 dark:bg-indigo-950";
-      case "user-input":
+      case "STTStart":
+      case "STTEnd":
+        return "border-purple-500 bg-purple-50 dark:bg-purple-950";
+      case "UserInputReceived":
         return "border-cyan-500 bg-cyan-50 dark:bg-cyan-950";
-      case "error":
-        return "border-red-600 bg-red-50 dark:bg-red-950";
+      case "ThoughtApiSubmit":
+      case "ThoughtApiFirstToken":
+      case "ThoughtParsed":
+        return "border-green-500 bg-green-50 dark:bg-green-950";
+      case "LocalLMSubmit":
+      case "LocalLMResponse":
+        return "border-blue-500 bg-blue-50 dark:bg-blue-950";
+      case "TTSStart":
+      case "TTSEnd":
+        return "border-orange-500 bg-orange-50 dark:bg-orange-950";
       default:
         return "border-gray-500 bg-gray-50 dark:bg-gray-950";
     }
@@ -205,7 +217,7 @@ export function Timeline({
                     <span
                       className={`${isExpanded ? "text-sm" : "text-xs"} font-mono text-muted-foreground`}
                     >
-                      {event.model}
+                      {event.type}
                     </span>
                   </div>
 

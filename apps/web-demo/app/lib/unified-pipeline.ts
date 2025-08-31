@@ -1,4 +1,5 @@
 import { INPUT_SAMPLE_RATE } from "./audio-constants";
+import { EventTracker, TurnMetadata } from "./event-tracker";
 
 export type AppMode = "text" | "voice";
 
@@ -12,14 +13,7 @@ export interface UnifiedPipelineConfig {
   onThoughtReceived?: (thought: string, index: number) => void;
   onTranscriptionReceived?: (text: string) => void;
   onStatusChange?: (status: string, message: string) => void;
-  onTimelineEvent?: (
-    type: string,
-    model: string,
-    message: string,
-    content?: string,
-    eventTimestamp?: number,
-    thoughtData?: any
-  ) => void;
+  onEventData?: (eventData: any) => void;
 }
 
 export interface UnifiedPipelineState {
@@ -43,6 +37,7 @@ export class UnifiedPipeline {
   private config: UnifiedPipelineConfig;
   private state: UnifiedPipelineState;
   private isWorkerReady = false;
+  private eventTracker = new EventTracker();
 
   constructor(config: UnifiedPipelineConfig) {
     this.config = config;
@@ -99,23 +94,11 @@ export class UnifiedPipeline {
 
     this.worker.onerror = (error) => {
       console.error("Worker error:", error);
-      this.config.onTimelineEvent?.(
-        "error",
-        "Worker",
-        "Worker error",
-        error.toString(),
-      );
     };
 
     this.worker.onmessage = ({ data }) => {
       if (data.error) {
         console.error("Worker error:", data.error);
-        this.config.onTimelineEvent?.(
-          "error",
-          "Worker",
-          "Processing error",
-          data.error,
-        );
         return;
       }
 
@@ -126,152 +109,38 @@ export class UnifiedPipeline {
         case "status":
           this.handleStatusMessage(data);
           break;
-        case "transcription":
-          this.handleTranscription(data.text);
-          this.config.onTimelineEvent?.(
-            "transcription",
-            "Whisper",
-            "Transcribed",
-            data,
-          );
-          break;
-        case "conversation_turn_start":
-          this.state.currentMessageId = null;
-          this.config.onTimelineEvent?.(
-            "conversation-turn",
-            "System",
-            "New conversation turn",
-            data,
-          );
-          break;
-        case "immediate_response":
-          this.handleImmediateResponse(data);
-          break;
-        case "enhanced_response":
-          this.handleEnhancedResponse(data);
-          break;
-        case "filler_response":
-          this.handleFillerResponse(data);
-          break;
-        case "silence_token":
-          this.config.onTimelineEvent?.(
-            "silence-token",
-            "System",
-            "Silence detected",
-            data.token,
-          );
-          break;
-        case "thought":
-          this.config.onThoughtReceived?.(data.thought, data.index);
-          const providerName = data.thoughtProvider === "gemini" ? "Gemini" : "None";
-          this.config.onTimelineEvent?.(
-            "thought",
-            providerName,
-            `Thought ${data.index + 1}`,
-            data.thought,
-          );
-          break;
         case "output":
           this.handleAudioOutput(data);
           break;
+        case "stt_start":
+          this.handleSTTStart(data);
+          break;
+        case "stt_end":
+          this.handleSTTEnd(data);
+          break;
+        case "conversation_turn_start":
+          this.handleConversationTurnStart(data);
+          break;
+        case "smollm_submit":
+          this.handleSmolLMSubmit(data);
+          break;
+        case "smollm_response":
+          this.handleSmolLMResponse(data);
+          break;
         case "tts_start":
-          this.config.onTimelineEvent?.(
-            "tts-start",
-            "TTS",
-            "Speaking",
-            data.text,
-          );
+          this.handleTTSStart(data);
           break;
         case "tts_end":
-          this.config.onTimelineEvent?.(
-            "tts-end",
-            "TTS",
-            "Speech complete",
-            data,
-          );
+          this.handleTTSEnd(data);
           break;
-        case "transcription_start":
-          this.config.onTimelineEvent?.(
-            "transcription-start",
-            "STT",
-            "Starting transcription",
-            data,
-          );
+        case "thought_submit":
+          this.handleThoughtSubmit(data);
           break;
-        case "inference_start":
-          this.config.onTimelineEvent?.(
-            "inference_start",
-            "SmolLM",
-            "Starting inference",
-            data,
-          );
+        case "first_thought_token_received":
+          this.handleFirstThoughtToken(data);
           break;
-        case "first_response":
-          this.config.onTimelineEvent?.(
-            "first_response",
-            "SmolLM",
-            "First response generated",
-            data,
-          );
-          break;
-        case "first_thought":
-          this.config.onTimelineEvent?.(
-            "first_thought",
-            "System",
-            "First thought received",
-            data,
-          );
-          break;
-        case "thought_generation_start":
-          this.config.onTimelineEvent?.(
-            "thought_generation_start",
-            "Thoughts",
-            "Starting thought generation",
-            data,
-          );
-          break;
-        case "thought_generation_end":
-          this.config.onTimelineEvent?.(
-            "thought_generation_end",
-            "Thoughts",
-            "Thought generation complete",
-            data,
-          );
-          break;
-        case "individual_thought_received":
-          this.config.onTimelineEvent?.(
-            "thought_received",
-            "API",
-            `Thought ${data.thoughtIndex + 1} received`,
-            data.thought,
-            data.turnStartTime + data.turnOffset,
-            {
-              thought: data.thought,
-              thoughtIndex: data.thoughtIndex,
-              timestamp: data.timestamp,
-              duration: data.duration,
-              apiRequestStartTime: data.apiRequestStartTime,
-              turnStartTime: data.turnStartTime,
-              turnOffset: data.turnOffset,
-              thoughtProvider: data.thoughtProvider || "unknown"
-            }
-          );
-          break;
-        case "thought_processing_start":
-          this.config.onTimelineEvent?.(
-            "thought_processing_start",
-            "SmolLM",
-            "Processing thought",
-            data,
-          );
-          break;
-        case "thought_processing_end":
-          this.config.onTimelineEvent?.(
-            "thought_processing_end",
-            "SmolLM",
-            "Thought processing complete",
-            data,
-          );
+        case "thought_response":
+          this.handleThoughtResponse(data);
           break;
       }
     };
@@ -281,28 +150,18 @@ export class UnifiedPipeline {
     if (data.status === "ready") {
       this.isWorkerReady = true;
       this.state.voices = data.voices || {};
-      this.config.onTimelineEvent?.(
-        "model-ready",
-        "Pipeline",
-        "All models loaded",
-        "",
-      );
     } else if (data.status === "recording_start") {
       this.state.isRecording = true;
-      this.config.onTimelineEvent?.(
-        "recording-start",
-        "VAD",
-        "Voice detected",
-        "",
-      );
+      if (this.eventTracker.hasActiveTurn()) {
+        this.eventTracker.addEvent("VoiceDetectionStart");
+        this.config.onEventData?.(this.eventTracker.getData());
+      }
     } else if (data.status === "recording_end") {
       this.state.isRecording = false;
-      this.config.onTimelineEvent?.(
-        "recording-end",
-        "VAD",
-        "Processing speech",
-        "",
-      );
+      if (this.eventTracker.hasActiveTurn()) {
+        this.eventTracker.addEvent("VoiceDetectionEnd");
+        this.config.onEventData?.(this.eventTracker.getData());
+      }
     }
     this.config.onStatusChange?.(data.status, data.message || "");
   }
@@ -317,63 +176,6 @@ export class UnifiedPipeline {
     this.config.onTranscriptionReceived?.(text);
   }
 
-  private handleImmediateResponse(data: any) {
-    this.state.currentMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    this.config.onMessageReceived?.(
-      "assistant",
-      data.response || data.content,
-      this.state.currentMessageId,
-    );
-    this.config.onTimelineEvent?.(
-      "smollm-response",
-      "SmolLM",
-      "Immediate response",
-      data.response,
-    );
-  }
-
-  private handleEnhancedResponse(data: any) {
-    if (this.state.currentMessageId) {
-      this.config.onMessageUpdated?.(
-        this.state.currentMessageId,
-        data.response,
-      );
-      this.config.onTimelineEvent?.(
-        "smollm-enhanced",
-        "SmolLM",
-        "Enhanced response",
-        data.response,
-      );
-    }
-  }
-
-  private handleFillerResponse(data: any) {
-    if (this.state.currentMessageId) {
-      this.config.onMessageUpdated?.(
-        this.state.currentMessageId,
-        data.response,
-      );
-      this.config.onTimelineEvent?.(
-        "smollm-filler",
-        "SmolLM",
-        "Filler response",
-        data.response,
-      );
-    } else {
-      this.state.currentMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      this.config.onMessageReceived?.(
-        "assistant",
-        data.response || data.content,
-        this.state.currentMessageId,
-      );
-      this.config.onTimelineEvent?.(
-        "smollm-filler",
-        "SmolLM",
-        "Filler response",
-        data.response,
-      );
-    }
-  }
 
   private handleAudioOutput(data: any): void {
     if (this.state.mode !== "voice" || !data.result) return;
@@ -387,6 +189,100 @@ export class UnifiedPipeline {
     if (this.playbackNode) {
       this.state.isPlaying = true;
       this.playbackNode.port.postMessage(audioBuffer);
+    }
+  }
+
+  private handleSTTStart(data: any): void {
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("STTStart");
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
+  }
+
+  private handleSTTEnd(data: any): void {
+    this.handleTranscription(data.text);
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("STTEnd", { text: data.text });
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
+  }
+
+  private handleConversationTurnStart(data: any): void {
+    this.state.currentMessageId = null;
+    this.startNewTurn();
+  }
+
+  private handleSmolLMSubmit(data: any): void {
+    console.log("SmolLM Submit event received:", data);
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("LocalLMSubmit", { prompt: data.prompt });
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
+  }
+
+  private handleSmolLMResponse(data: any): void {
+    if (data.isInitialResponse) {
+      this.state.currentMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      this.config.onMessageReceived?.(
+        "assistant",
+        data.response || data.content,
+        this.state.currentMessageId,
+      );
+    } else {
+      if (this.state.currentMessageId) {
+        this.config.onMessageUpdated?.(
+          this.state.currentMessageId,
+          data.response,
+        );
+      } else {
+        this.state.currentMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        this.config.onMessageReceived?.(
+          "assistant",
+          data.response || data.content,
+          this.state.currentMessageId,
+        );
+      }
+    }
+    
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("LocalLMResponse", { response: data.response || data.content });
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
+  }
+
+  private handleTTSStart(data: any): void {
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("TTSStart");
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
+  }
+
+  private handleTTSEnd(data: any): void {
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("TTSEnd");
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
+  }
+
+  private handleThoughtSubmit(data: any): void {
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("ThoughtApiSubmit");
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
+  }
+
+  private handleFirstThoughtToken(data: any): void {
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("ThoughtApiFirstToken");
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
+  }
+
+  private handleThoughtResponse(data: any): void {
+    this.config.onThoughtReceived?.(data.thought, data.index);
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("ThoughtParsed", { response: data.thought });
+      this.config.onEventData?.(this.eventTracker.getData());
     }
   }
 
@@ -467,9 +363,17 @@ export class UnifiedPipeline {
     this.state.isProcessing = true;
     this.state.currentMessageId = null;
     
+    if (!this.eventTracker.hasActiveTurn()) {
+      this.startNewTurn();
+    }
+    
     const userMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     this.config.onMessageReceived?.("user", text, userMessageId);
-    this.config.onTimelineEvent?.("user-input", "User", "Text input", text);
+    
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("UserInputReceived", { text });
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
 
     this.worker.postMessage({
       type: "process_text",
@@ -518,6 +422,23 @@ export class UnifiedPipeline {
 
   getState() {
     return { ...this.state };
+  }
+
+  private startNewTurn(): void {
+    const metadata: TurnMetadata = {
+      localModel: this.state.selectedModel === "maximuspowers/smollm-convo-filler-onnx-official" ? "smollm-finetuned" : "smollm-base",
+      thoughtModel: this.state.thoughtProvider === "gemini" ? "gemini-flash-2.0" : "none",
+      voiceMode: this.state.mode === "voice"
+    };
+    this.eventTracker.startNewTurn(metadata);
+  }
+
+  getEventData() {
+    return this.eventTracker.getData();
+  }
+
+  resetEventData(): void {
+    this.eventTracker.reset();
   }
 
   async switchMode(newMode: AppMode): Promise<void> {

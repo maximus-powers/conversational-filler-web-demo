@@ -69,8 +69,14 @@ ${conversationText}`,
       async start(controller) {
         let buffer = "";
         const thoughts: string[] = [];
+        let firstTokenSent = false;
 
         for await (const chunk of result.textStream) {
+          if (!firstTokenSent) {
+            controller.enqueue(encoder.encode("[first_token]"));
+            firstTokenSent = true;
+          }
+          
           buffer += chunk;
 
           // parse thoughts
