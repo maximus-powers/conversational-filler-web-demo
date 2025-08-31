@@ -458,24 +458,24 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
     turnStartTime: conversationTurnStartTime
   });
   
-  const immediateResponse = await processThought("<|sil|>", userText, [], splitter);
-  if (immediateResponse) {
-    thoughtResponsePairs.push({ thought: "<|sil|>", response: immediateResponse });
-    messages.push({ role: "assistant", content: immediateResponse });
-    try {
-      clearSilenceTimer();
+  let thoughtsPromise = null;
+  let thoughtStartTime = null;
+  
+  try {
+    clearSilenceTimer();
+    
+    if (thoughtProvider === 'none') {
+      console.log('Using local-only mode with silence tokens');
       
-      if (thoughtProvider === 'none') {
-        console.log('Using local-only mode with silence tokens');
-        
-        const thoughtStartTime = Date.now();
-        self.postMessage({ 
-          type: "thought_generation_start", 
-          timestamp: thoughtStartTime,
-          turnOffset: thoughtStartTime - conversationTurnStartTime,
-          turnStartTime: conversationTurnStartTime
-        });
-        
+      thoughtStartTime = Date.now();
+      self.postMessage({ 
+        type: "thought_generation_start", 
+        timestamp: thoughtStartTime,
+        turnOffset: thoughtStartTime - conversationTurnStartTime,
+        turnStartTime: conversationTurnStartTime
+      });
+      
+      thoughtsPromise = Promise.resolve().then(async () => {
         for (let i = 0; i < 4; i++) {
           const silTokenTime = Date.now();
           self.postMessage({ 
@@ -491,7 +491,6 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
           thoughtQueue.push("<|sil|>"); // queue 4 sil tokens for smollm to process without thoughts
         }
         streamComplete = true;
-        await processThoughtQueue(userText, thoughtResponsePairs, splitter);
         
         const thoughtEndTime = Date.now();
         self.postMessage({ 
@@ -500,28 +499,39 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
           duration: thoughtEndTime - thoughtStartTime,
           startTime: thoughtStartTime
         });
-      } else {
-        const thoughtStartTime = Date.now();
-        self.postMessage({ 
-          type: "thought_generation_start", 
-          timestamp: thoughtStartTime,
-          turnOffset: thoughtStartTime - conversationTurnStartTime,
-          turnStartTime: conversationTurnStartTime
-        });
-        
-        const thoughtsEndpoint = '/api/chat-thoughts-gemini';
-        console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
-        
-        const thoughtsResponse = await fetch(thoughtsEndpoint, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            messages: messages
-          }),
-        });
-
+      });
+    } else {
+      thoughtStartTime = Date.now();
+      self.postMessage({ 
+        type: "thought_generation_start", 
+        timestamp: thoughtStartTime,
+        turnOffset: thoughtStartTime - conversationTurnStartTime,
+        turnStartTime: conversationTurnStartTime
+      });
+      
+      const thoughtsEndpoint = '/api/chat-thoughts-gemini';
+      console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
+      
+      thoughtsPromise = fetch(thoughtsEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: messages
+        }),
+      });
+    }
+    
+    const immediateResponse = await processThought("<|sil|>", userText, [], splitter);
+    if (immediateResponse) {
+      thoughtResponsePairs.push({ thought: "<|sil|>", response: immediateResponse });
+      messages.push({ role: "assistant", content: immediateResponse });
+    }
+    
+    if (thoughtsPromise && thoughtProvider !== 'none') {
+      const thoughtsResponse = await thoughtsPromise;
+      
         // sil token handling
         if (!thoughtsResponse.ok) {
           console.warn(`Failed to get thoughts from ${thoughtProvider}`);
@@ -595,15 +605,17 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
           duration: thoughtEndTime - thoughtStartTime,
           startTime: thoughtStartTime
         });
-      }
-    } catch (error) {
-      console.warn("Failed to generate thoughts:", error);
+    } else if (thoughtsPromise && thoughtProvider === 'none') {
+      await thoughtsPromise;
+      await processThoughtQueue(userText, thoughtResponsePairs, splitter);
     }
-    
-    const fullResponse = thoughtResponsePairs.map(pair => pair.response).join(" ");
-    if (fullResponse !== immediateResponse) {
-      messages[messages.length - 1].content = fullResponse;
-    }
+  } catch (error) {
+    console.warn("Failed to generate thoughts:", error);
+  }
+  
+  const fullResponse = thoughtResponsePairs.map(pair => pair.response).join(" ");
+  if (fullResponse !== immediateResponse) {
+    messages[messages.length - 1].content = fullResponse;
   }
   
   if (splitter) {

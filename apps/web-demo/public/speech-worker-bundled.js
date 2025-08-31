@@ -65595,21 +65595,20 @@ ${thought}<|im_end|>
         turnOffset: inferenceStartTime - conversationTurnStartTime,
         turnStartTime: conversationTurnStartTime
       });
-      const immediateResponse = await processThought("<|sil|>", userText, [], splitter);
-      if (immediateResponse) {
-        thoughtResponsePairs.push({ thought: "<|sil|>", response: immediateResponse });
-        messages.push({ role: "assistant", content: immediateResponse });
-        try {
-          clearSilenceTimer();
-          if (thoughtProvider === "none") {
-            console.log("Using local-only mode with silence tokens");
-            const thoughtStartTime = Date.now();
-            self.postMessage({
-              type: "thought_generation_start",
-              timestamp: thoughtStartTime,
-              turnOffset: thoughtStartTime - conversationTurnStartTime,
-              turnStartTime: conversationTurnStartTime
-            });
+      let thoughtsPromise = null;
+      let thoughtStartTime = null;
+      try {
+        clearSilenceTimer();
+        if (thoughtProvider === "none") {
+          console.log("Using local-only mode with silence tokens");
+          thoughtStartTime = Date.now();
+          self.postMessage({
+            type: "thought_generation_start",
+            timestamp: thoughtStartTime,
+            turnOffset: thoughtStartTime - conversationTurnStartTime,
+            turnStartTime: conversationTurnStartTime
+          });
+          thoughtsPromise = Promise.resolve().then(async () => {
             for (let i3 = 0; i3 < 4; i3++) {
               const silTokenTime = Date.now();
               self.postMessage({
@@ -65626,7 +65625,6 @@ ${thought}<|im_end|>
               thoughtQueue.push("<|sil|>");
             }
             streamComplete = true;
-            await processThoughtQueue(userText, thoughtResponsePairs, splitter);
             const thoughtEndTime = Date.now();
             self.postMessage({
               type: "thought_generation_end",
@@ -65634,95 +65632,106 @@ ${thought}<|im_end|>
               duration: thoughtEndTime - thoughtStartTime,
               startTime: thoughtStartTime
             });
+          });
+        } else {
+          thoughtStartTime = Date.now();
+          self.postMessage({
+            type: "thought_generation_start",
+            timestamp: thoughtStartTime,
+            turnOffset: thoughtStartTime - conversationTurnStartTime,
+            turnStartTime: conversationTurnStartTime
+          });
+          const thoughtsEndpoint = "/api/chat-thoughts-gemini";
+          console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
+          thoughtsPromise = fetch(thoughtsEndpoint, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              messages
+            })
+          });
+        }
+        const immediateResponse2 = await processThought("<|sil|>", userText, [], splitter);
+        if (immediateResponse2) {
+          thoughtResponsePairs.push({ thought: "<|sil|>", response: immediateResponse2 });
+          messages.push({ role: "assistant", content: immediateResponse2 });
+        }
+        if (thoughtsPromise && thoughtProvider !== "none") {
+          const thoughtsResponse = await thoughtsPromise;
+          if (!thoughtsResponse.ok) {
+            console.warn(`Failed to get thoughts from ${thoughtProvider}`);
+            startSilenceTimer(userText, thoughtResponsePairs, splitter);
           } else {
-            const thoughtStartTime = Date.now();
-            self.postMessage({
-              type: "thought_generation_start",
-              timestamp: thoughtStartTime,
-              turnOffset: thoughtStartTime - conversationTurnStartTime,
-              turnStartTime: conversationTurnStartTime
-            });
-            const thoughtsEndpoint = "/api/chat-thoughts-gemini";
-            console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
-            const thoughtsResponse = await fetch(thoughtsEndpoint, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json"
-              },
-              body: JSON.stringify({
-                messages
-              })
-            });
-            if (!thoughtsResponse.ok) {
-              console.warn(`Failed to get thoughts from ${thoughtProvider}`);
+            const reader = thoughtsResponse.body?.getReader();
+            if (!reader) {
               startSilenceTimer(userText, thoughtResponsePairs, splitter);
             } else {
-              const reader = thoughtsResponse.body?.getReader();
-              if (!reader) {
-                startSilenceTimer(userText, thoughtResponsePairs, splitter);
-              } else {
-                const decoder = new TextDecoder();
-                let buffer = "";
-                const thoughts = [];
-                while (true) {
-                  const { done, value } = await reader.read();
-                  if (done) {
-                    streamComplete = true;
-                    break;
-                  }
-                  const chunk = decoder.decode(value, { stream: true });
-                  buffer += chunk;
-                  let startIndex = buffer.indexOf("[bt]");
-                  while (startIndex !== -1) {
-                    const endIndex = buffer.indexOf("[et]", startIndex);
-                    if (endIndex !== -1) {
-                      const thought = buffer.substring(startIndex + 4, endIndex).trim();
-                      if (thought && !thoughts.includes(thought)) {
-                        thoughts.push(thought);
-                        const thoughtReceivedTime = Date.now();
-                        self.postMessage({
-                          type: "individual_thought_received",
-                          thought,
-                          timestamp: thoughtReceivedTime,
-                          thoughtIndex: thoughts.length - 1,
-                          apiRequestStartTime: thoughtStartTime,
-                          duration: thoughtReceivedTime - thoughtStartTime,
-                          turnOffset: thoughtReceivedTime - conversationTurnStartTime,
-                          turnStartTime: conversationTurnStartTime
-                        });
-                        thoughtQueue.push(thought);
-                        processThoughtQueue(userText, thoughtResponsePairs, splitter);
-                      }
-                      buffer = buffer.substring(endIndex + 4);
-                      startIndex = buffer.indexOf("[bt]");
-                    } else {
-                      break;
+              const decoder = new TextDecoder();
+              let buffer = "";
+              const thoughts = [];
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                  streamComplete = true;
+                  break;
+                }
+                const chunk = decoder.decode(value, { stream: true });
+                buffer += chunk;
+                let startIndex = buffer.indexOf("[bt]");
+                while (startIndex !== -1) {
+                  const endIndex = buffer.indexOf("[et]", startIndex);
+                  if (endIndex !== -1) {
+                    const thought = buffer.substring(startIndex + 4, endIndex).trim();
+                    if (thought && !thoughts.includes(thought)) {
+                      thoughts.push(thought);
+                      const thoughtReceivedTime = Date.now();
+                      self.postMessage({
+                        type: "individual_thought_received",
+                        thought,
+                        timestamp: thoughtReceivedTime,
+                        thoughtIndex: thoughts.length - 1,
+                        apiRequestStartTime: thoughtStartTime,
+                        duration: thoughtReceivedTime - thoughtStartTime,
+                        turnOffset: thoughtReceivedTime - conversationTurnStartTime,
+                        turnStartTime: conversationTurnStartTime
+                      });
+                      thoughtQueue.push(thought);
+                      processThoughtQueue(userText, thoughtResponsePairs, splitter);
                     }
-                  }
-                  if (buffer.includes("[done]")) {
-                    streamComplete = true;
-                    clearSilenceTimer();
+                    buffer = buffer.substring(endIndex + 4);
+                    startIndex = buffer.indexOf("[bt]");
+                  } else {
                     break;
                   }
                 }
-                await processThoughtQueue(userText, thoughtResponsePairs, splitter);
+                if (buffer.includes("[done]")) {
+                  streamComplete = true;
+                  clearSilenceTimer();
+                  break;
+                }
               }
+              await processThoughtQueue(userText, thoughtResponsePairs, splitter);
             }
-            const thoughtEndTime = Date.now();
-            self.postMessage({
-              type: "thought_generation_end",
-              timestamp: thoughtEndTime,
-              duration: thoughtEndTime - thoughtStartTime,
-              startTime: thoughtStartTime
-            });
           }
-        } catch (error) {
-          console.warn("Failed to generate thoughts:", error);
+          const thoughtEndTime = Date.now();
+          self.postMessage({
+            type: "thought_generation_end",
+            timestamp: thoughtEndTime,
+            duration: thoughtEndTime - thoughtStartTime,
+            startTime: thoughtStartTime
+          });
+        } else if (thoughtsPromise && thoughtProvider === "none") {
+          await thoughtsPromise;
+          await processThoughtQueue(userText, thoughtResponsePairs, splitter);
         }
-        const fullResponse = thoughtResponsePairs.map((pair) => pair.response).join(" ");
-        if (fullResponse !== immediateResponse) {
-          messages[messages.length - 1].content = fullResponse;
-        }
+      } catch (error) {
+        console.warn("Failed to generate thoughts:", error);
+      }
+      const fullResponse = thoughtResponsePairs.map((pair) => pair.response).join(" ");
+      if (fullResponse !== immediateResponse) {
+        messages[messages.length - 1].content = fullResponse;
       }
       if (splitter) {
         splitter.close();
