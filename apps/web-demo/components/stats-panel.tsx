@@ -50,13 +50,13 @@ export function StatsPanel({
 }) {
   const metrics = React.useMemo((): ConversationMetrics | null => {
     if (!eventData?.turns?.length || !conversationStartTime) return null;
-    
-    const allEvents = eventData.turns.flatMap(turn => 
-      turn.timeline.map(event => ({
-        ...event,
-        timestamp: new Date(event.timestamp).getTime()
-      }))
-    ).sort((a, b) => a.timestamp - b.timestamp);
+
+    // only last turn gets displayed in waterfall
+    const lastTurn = eventData.turns[eventData.turns.length - 1];
+    const allEvents = lastTurn.timeline.map(event => ({
+      ...event,
+      timestamp: new Date(event.timestamp).getTime()
+    })).sort((a, b) => a.timestamp - b.timestamp);
     
     // calc metrics
     const firstResponse = allEvents.find(e => e.eventName === "LocalLMResponse");
@@ -176,10 +176,12 @@ export function StatsPanel({
     );
   }
 
-  // timeline scale
+  // timeline scale - use last turn's timeframe instead of full conversation
+  const lastTurn = eventData?.turns[eventData.turns.length - 1];
+  const lastTurnStartTime = lastTurn ? new Date(lastTurn.timeline[0]?.timestamp || 0).getTime() : conversationStartTime;
   const totalDuration = Math.max(
-    ...metrics.processTimeline.map(seg => seg.endTime - conversationStartTime),
-    ...metrics.thoughtTimeline.map(seg => seg.endTime - conversationStartTime)
+    ...metrics.processTimeline.map(seg => seg.endTime - lastTurnStartTime),
+    ...metrics.thoughtTimeline.map(seg => seg.endTime - lastTurnStartTime)
   );
 
   const formatTime = (ms: number) => {
@@ -223,9 +225,50 @@ export function StatsPanel({
 
       {/* Waterfall Trace */}
       <div className="space-y-0">
-        <div className="text-xs font-medium text-muted-foreground mb-2">Processing Waterfall</div>
+        <div className="flex items-center gap-2 mb-2">
+          <div className="text-xs font-medium text-muted-foreground w-36">Process Trace</div>
+          <div className="flex-1 relative text-xs text-muted-foreground">
+            <div className="flex justify-between">
+              <span>0ms</span>
+              <span>{formatTime(totalDuration)}</span>
+            </div>
+            {/* Half-second increment marks */}
+            {(() => {
+              const marks = [];
+              const durationMs = totalDuration;
+              const halfSecondIntervals = Math.ceil(durationMs / 500);
+              
+              for (let i = 1; i < halfSecondIntervals; i++) {
+                const intervalMs = i * 500; // Every 0.5 seconds
+                if (intervalMs < durationMs) {
+                  const position = (intervalMs / durationMs) * 100;
+                  const isFullSecond = i % 2 === 0;
+                  marks.push(
+                    <div
+                      key={i}
+                      className="absolute top-0 flex flex-col items-center"
+                      style={{ left: `${position}%`, transform: 'translateX(-50%)' }}
+                    >
+                      <span className="text-xs text-muted-foreground mt-0.5">{i/2}s</span>
+                    </div>
+                  );
+                }
+              }
+              return marks;
+            })()}
+          </div>
+        </div>
         
         {(() => {
+          if (!eventData?.turns?.length) return null;
+          const lastTurn = eventData.turns[eventData.turns.length - 1];
+          const waterfallEvents = lastTurn.timeline.map(event => ({
+            ...event,
+            timestamp: new Date(event.timestamp).getTime()
+          }));
+          
+          const turnStartTime = new Date(lastTurn.timeline[0]?.timestamp || 0).getTime();
+          
           const allSegments = [
             ...metrics.processTimeline.map(s => ({...s, category: 'process'})),
             ...metrics.thoughtTimeline.map(t => ({
@@ -239,11 +282,12 @@ export function StatsPanel({
             }))
           ].sort((a, b) => a.startTime - b.startTime);
 
+          const firstSmolLMSegment = allSegments.find(s => s.category === 'process' && s.type === 'smollm');
+          const apiLatencySegment = allSegments.find(s => s.category === 'thought' && s.label === 'API Latency');
+
           return allSegments.map((segment, index) => {
-            const left = ((segment.startTime - conversationStartTime) / totalDuration) * 100;
+            const left = ((segment.startTime - turnStartTime) / totalDuration) * 100;
             const width = (segment.duration / totalDuration) * 100;
-            const startOffset = segment.startTime - conversationStartTime;
-            const endOffset = segment.endTime - conversationStartTime;
             
             let colorClass = '';
             if (segment.category === 'thought') {
@@ -256,70 +300,128 @@ export function StatsPanel({
               colorClass = getProcessColor(segment.type as ProcessSegment['type']);
             }
             
-            const tooltipContent = `${segment.label}${segment.category === 'process' ? ` (${segment.type.toUpperCase()})` : ''}
-Duration: ${formatTime(segment.duration)}`;
+            let tooltipContent = `${segment.label}${segment.category === 'process' ? ` (${segment.type.toUpperCase()})` : ''} \nDuration: ${formatTime(segment.duration)}`;
+            let relevantEvent = null;
+            
+            if (segment.category === 'process') {
+              if (segment.type === 'smollm') {
+                const submitEvent = waterfallEvents.find((e) => 
+                  e.eventName === 'LocalLMSubmit' && Math.abs(e.timestamp - segment.startTime) < 50
+                );
+                const responseEvent = waterfallEvents.find((e) => 
+                  e.eventName === 'LocalLMResponse' && Math.abs(e.timestamp - segment.endTime) < 50
+                );
+                relevantEvent = submitEvent || responseEvent;
+              } else if (segment.type === 'stt') {
+                relevantEvent = waterfallEvents.find((e) => 
+                  (e.eventName === 'STTEnd') && Math.abs(e.timestamp - segment.endTime) < 50
+                );
+              } else if (segment.type === 'tts') {
+                relevantEvent = waterfallEvents.find((e) => 
+                  (e.eventName === 'TTSStart' || e.eventName === 'TTSEnd') && 
+                  e.timestamp >= segment.startTime && e.timestamp <= segment.endTime
+                );
+              }
+            } else {
+              if (segment.label === 'API Latency') {
+                relevantEvent = waterfallEvents.find((e) => e.eventName === 'ThoughtApiSubmit');
+              } else {
+                relevantEvent = waterfallEvents.find((e) => 
+                  e.eventName === 'ThoughtParsed' && Math.abs(e.timestamp - segment.endTime) < 50
+                );
+              }
+            }
+            
+            if (segment.category === 'process' && segment.type === 'smollm') {
+              const submitEvent = waterfallEvents.find((e) => 
+                e.eventName === 'LocalLMSubmit' && Math.abs(e.timestamp - segment.startTime) < 50
+              );
+              const responseEvent = waterfallEvents.find((e) => 
+                e.eventName === 'LocalLMResponse' && Math.abs(e.timestamp - segment.endTime) < 50
+              );
+              
+              if (submitEvent?.prompt) {
+                tooltipContent += `\nPrompt: ${submitEvent.prompt}`;
+              }
+              if (responseEvent?.response) {
+                tooltipContent += `\nResponse: ${responseEvent.response}`;
+              }
+            } else if (relevantEvent) {
+              const content = relevantEvent.text || relevantEvent.prompt || relevantEvent.response;
+              if (content) {
+                tooltipContent += `\nContent: ${content}`;
+              }
+            }
+            
+            const isFirstSmolLM = segment === firstSmolLMSegment;
             
             return (
               <div key={`waterfall-${index}`} className="flex items-center gap-2">
                 <span className="text-xs w-36 text-muted-foreground truncate" title={segment.label}>
                   {segment.label}
                 </span>
-                <div className="flex-1 relative h-3 bg-muted rounded overflow-hidden">
+                <div className="flex-1 relative h-3 rounded overflow-hidden">
+                  {(() => {
+                    const gridLines = [];
+                    const durationMs = totalDuration;
+                    const halfSecondIntervals = Math.ceil(durationMs / 500); 
+                    
+                    for (let i = 1; i < halfSecondIntervals; i++) {
+                      const intervalMs = i * 500;
+                      if (intervalMs < durationMs) {
+                        const position = (intervalMs / durationMs) * 100;
+                        gridLines.push(
+                          <div
+                            key={`row-grid-${index}-${i}`}
+                            className="absolute top-0 bottom-0 w-px bg-muted-foreground opacity-20 pointer-events-none"
+                            style={{ left: `${position}%` }}
+                          />
+                        );
+                      }
+                    }
+                    return gridLines;
+                  })()}
+                  
                   <Tooltip content={tooltipContent} preserveChildPositioning={true}>
                     <div
-                      className={`absolute top-0 h-full ${colorClass} opacity-80 hover:opacity-100 cursor-help transition-opacity`}
+                      className={`absolute top-0 h-full ${colorClass} opacity-80 hover:opacity-100 transition-opacity rounded`}
                       style={{
                         left: `${left}%`,
                         width: `${width}%`,
                       }}
                     />
                   </Tooltip>
-                  {index > 0 && (
-                    <div 
-                      className="absolute top-1/2 h-0.5 bg-muted-foreground/30"
-                      style={{
-                        left: '0%',
-                        width: `${left}%`,
-                        transform: 'translateY(-50%)'
-                      }}
-                    />
-                  )}
+                  
+                  {/* Latency reduction line */}
+                  {isFirstSmolLM && firstSmolLMSegment && apiLatencySegment && (() => {
+                    const reductionMs = apiLatencySegment.endTime - firstSmolLMSegment.endTime;
+                    const lineWidth = ((apiLatencySegment.endTime - turnStartTime) / totalDuration) * 100 - (left + width);
+                    
+                    return (
+                      <div
+                        className="absolute top-1/2 flex items-center px-1"
+                        style={{
+                          left: `${left + width}%`,
+                          width: `${lineWidth}%`,
+                          transform: 'translateY(-50%)',
+                          minWidth: '80px'
+                        }}
+                      >
+                        <div className="flex-1 h-0.5 bg-muted relative flex items-center justify-center">
+                          <span className="text-xs text-muted-foreground bg-background px-1 whitespace-nowrap">
+                            Reduction - {Math.round(reductionMs)}ms
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             );
           });
         })()}
-
-        {/* Color Key */}
-        <div className="flex items-center gap-4 mt-2 text-xs">
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 bg-purple-500 rounded-sm"></div>
-            <span>STT</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 bg-blue-500 rounded-sm"></div>
-            <span>SmolLM</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 bg-orange-500 rounded-sm"></div>
-            <span>TTS</span>
-          </div>
-          {metrics.thoughtTimeline.length > 0 && (
-            <div className="flex items-center gap-1">
-              <div className="w-3 h-3 bg-green-500 rounded-sm"></div>
-              <span>Thoughts ({metrics.thoughtTimeline.length})</span>
-            </div>
-          )}
-        </div>
       </div>
 
-      {/* Timeline Scale */}
-      <div className="mt-3 text-xs text-muted-foreground">
-        <div className="flex justify-between">
-          <span>0ms</span>
-          <span>{formatTime(totalDuration)}</span>
-        </div>
-      </div>
     </div>
   );
 }

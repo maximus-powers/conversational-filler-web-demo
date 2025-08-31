@@ -15,12 +15,20 @@ export function Tooltip({ content, children, className = "", preserveChildPositi
   const containerRef = useRef<HTMLDivElement>(null);
 
   const handleMouseEnter = (e: React.MouseEvent) => {
-    const rect = e.currentTarget.getBoundingClientRect();
     setPosition({
-      x: rect.left + rect.width / 2,
-      y: rect.top - 10,
+      x: e.clientX,
+      y: e.clientY - 10,
     });
     setIsVisible(true);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isVisible) {
+      setPosition({
+        x: e.clientX,
+        y: e.clientY - 10,
+      });
+    }
   };
 
   const handleMouseLeave = () => {
@@ -32,15 +40,16 @@ export function Tooltip({ content, children, className = "", preserveChildPositi
       <div
         ref={containerRef}
         onMouseEnter={handleMouseEnter}
+        onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
-        className={`${preserveChildPositioning ? '' : 'relative'} ${className}`}
+        className={`${preserveChildPositioning ? '' : 'relative cursor-pointer'} ${className}`}
       >
         {children}
       </div>
       
       {isVisible && (
         <div
-          className="fixed z-50 px-3 py-2 text-xs bg-gray-900 text-white rounded-lg shadow-lg pointer-events-none whitespace-pre-line max-w-xs"
+          className="fixed z-50 px-3 py-2 text-xs bg-muted text-foreground rounded-lg shadow-lg pointer-events-none whitespace-pre-line max-w-xs border"
           style={{
             left: position.x,
             top: position.y,
@@ -56,7 +65,7 @@ export function Tooltip({ content, children, className = "", preserveChildPositi
               height: 0,
               borderLeft: '4px solid transparent',
               borderRight: '4px solid transparent',
-              borderTop: '4px solid #111827',
+              borderTop: '4px solid hsl(var(--muted))',
             }}
           />
         </div>
