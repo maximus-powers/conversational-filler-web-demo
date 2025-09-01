@@ -1,0 +1,36 @@
+{
+  "name": "@convo-filler/database",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.5",
+    "@neondatabase/serverless": "^1.0.1",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@convo-filler/typescript-config": "workspace:*",
+    "drizzle-kit": "^0.31.4",
+    "@types/uuid": "^10.0.0",
+    "@types/node": "^20",
+    "typescript": "^5.7.3",
+    "dotenv": "^16.4.5"
+  }
+}

@@ -1,7 +1,7 @@
 import { INPUT_SAMPLE_RATE } from "./audio-constants";
 import { EventTracker, TurnMetadata } from "./event-tracker";
 
-export type AppMode = "text" | "voice";
+export type InferenceMode = "text" | "voice";
 
 export interface UnifiedPipelineConfig {
   onMessageReceived?: (
@@ -17,7 +17,7 @@ export interface UnifiedPipelineConfig {
 }
 
 export interface UnifiedPipelineState {
-  mode: AppMode;
+  mode: InferenceMode;
   isReady: boolean;
   isProcessing: boolean;
   isRecording: boolean;
@@ -54,7 +54,7 @@ export class UnifiedPipeline {
     };
   }
 
-  async initialize(mode: AppMode = "text"): Promise<void> {
+  async initialize(mode: InferenceMode = "text") {
     this.state.mode = mode;
 
     try {
@@ -113,7 +113,7 @@ export class UnifiedPipeline {
           this.handleAudioOutput(data);
           break;
         case "stt_start":
-          this.handleSTTStart(data);
+          this.handleSTTStart();
           break;
         case "stt_end":
           this.handleSTTEnd(data);
@@ -128,16 +128,16 @@ export class UnifiedPipeline {
           this.handleSmolLMResponse(data);
           break;
         case "tts_start":
-          this.handleTTSStart(data);
+          this.handleTTSStart();
           break;
         case "tts_end":
-          this.handleTTSEnd(data);
+          this.handleTTSEnd();
           break;
         case "thought_submit":
-          this.handleThoughtSubmit(data);
+          this.handleThoughtSubmit();
           break;
         case "first_thought_token_received":
-          this.handleFirstThoughtToken(data);
+          this.handleFirstThoughtToken();
           break;
         case "thought_response":
           this.handleThoughtResponse(data);
@@ -177,29 +177,23 @@ export class UnifiedPipeline {
   }
 
 
-  private handleAudioOutput(data: any): void {
+  private handleAudioOutput(data: any) {
     if (this.state.mode !== "voice" || !data.result) return;
     const audioBuffer = data.result; // { type: 'output', text: string, result: Float32Array }
-    console.log(
-      "Handling audio output, buffer length:",
-      audioBuffer?.length,
-      "text:",
-      data.text,
-    );
     if (this.playbackNode) {
       this.state.isPlaying = true;
       this.playbackNode.port.postMessage(audioBuffer);
     }
   }
 
-  private handleSTTStart(data: any): void {
+  private handleSTTStart() {
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("STTStart");
       this.config.onEventData?.(this.eventTracker.getData());
     }
   }
 
-  private handleSTTEnd(data: any): void {
+  private handleSTTEnd(data: any) {
     this.handleTranscription(data.text);
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("STTEnd", { text: data.text });
@@ -207,20 +201,19 @@ export class UnifiedPipeline {
     }
   }
 
-  private handleConversationTurnStart(data: any): void {
+  private handleConversationTurnStart(data: any) {
     this.state.currentMessageId = null;
     this.startNewTurn();
   }
 
-  private handleSmolLMSubmit(data: any): void {
-    console.log("SmolLM Submit event received:", data);
+  private handleSmolLMSubmit(data: any) {
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("LocalLMSubmit", { prompt: data.prompt });
       this.config.onEventData?.(this.eventTracker.getData());
     }
   }
 
-  private handleSmolLMResponse(data: any): void {
+  private handleSmolLMResponse(data: any) {
     if (data.isInitialResponse) {
       this.state.currentMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
       this.config.onMessageReceived?.(
@@ -250,28 +243,28 @@ export class UnifiedPipeline {
     }
   }
 
-  private handleTTSStart(data: any): void {
+  private handleTTSStart() {
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("TTSStart");
       this.config.onEventData?.(this.eventTracker.getData());
     }
   }
 
-  private handleTTSEnd(data: any): void {
+  private handleTTSEnd() {
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("TTSEnd");
       this.config.onEventData?.(this.eventTracker.getData());
     }
   }
 
-  private handleThoughtSubmit(data: any): void {
+  private handleThoughtSubmit(): void {
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("ThoughtApiSubmit");
       this.config.onEventData?.(this.eventTracker.getData());
     }
   }
 
-  private handleFirstThoughtToken(data: any): void {
+  private handleFirstThoughtToken(): void {
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("ThoughtApiFirstToken");
       this.config.onEventData?.(this.eventTracker.getData());
@@ -309,7 +302,7 @@ export class UnifiedPipeline {
     await this.setupMicrophone();
   }
 
-  private async setupMicrophone(): Promise<void> {
+  private async setupMicrophone() {
     if (!this.audioContext) return;
 
     try {
@@ -355,7 +348,7 @@ export class UnifiedPipeline {
     }
   }
 
-  async processText(text: string): Promise<void> {
+  async processText(text: string) {
     if (!this.worker || !this.isWorkerReady) {
       throw new Error("Pipeline not ready");
     }
@@ -382,20 +375,6 @@ export class UnifiedPipeline {
     });
   }
 
-  async startRecording(): Promise<void> {
-    if (this.state.mode !== "voice" || !this.worker) {
-      throw new Error("Voice mode not initialized");
-    }
-    this.state.isRecording = true;
-    this.worker.postMessage({ type: "start_recording" });
-  }
-
-  async stopRecording(): Promise<void> {
-    if (!this.worker) return;
-    this.state.isRecording = false;
-    this.worker.postMessage({ type: "stop_recording" });
-  }
-
   setVoice(voice: string) {
     if (this.worker) {
       this.worker.postMessage({ type: "set_voice", voice });
@@ -416,12 +395,8 @@ export class UnifiedPipeline {
     }
   }
 
-  getVoices(): Record<string, any> {
+  getVoices() {
     return this.state.voices;
-  }
-
-  getState() {
-    return { ...this.state };
   }
 
   private startNewTurn(): void {
@@ -437,19 +412,20 @@ export class UnifiedPipeline {
     return this.eventTracker.getData();
   }
 
-  resetEventData(): void {
+  resetEventData() {
     this.eventTracker.reset();
   }
 
-  async switchMode(newMode: AppMode): Promise<void> {
+  async switchMode(newMode: InferenceMode) {
     if (newMode === this.state.mode) return;
     this.dispose(); // clean up old mode
     await this.initialize(newMode);
   }
 
-  dispose(): void {
-    if (this.state.isRecording) {
-      this.stopRecording();
+  dispose() {
+    if (this.state.isRecording && this.worker) {
+      this.state.isRecording = false;
+      this.worker.postMessage({ type: "stop_recording" });
     }
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach((track) => track.stop());

@@ -2,15 +2,15 @@
 
 import { Button } from "@convo-filler/ui/components/button";
 import { MessageSquare, Mic } from "lucide-react";
-import { AppMode } from "../app/lib/unified-pipeline";
+import { InferenceMode } from "../app/lib/unified-pipeline";
 
-export function ModeSwitcher({
+export function InferenceModeSwitcher({
   currentMode,
   onModeChange,
   disabled,
 }: {
-  currentMode: AppMode;
-  onModeChange: (mode: AppMode) => void;
+  currentMode: InferenceMode;
+  onModeChange: (mode: InferenceMode) => void;
   disabled?: boolean;
 }) {
   return (

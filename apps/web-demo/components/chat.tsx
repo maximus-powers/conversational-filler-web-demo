@@ -4,9 +4,9 @@ import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
 import { Bot, User, Loader2, Send, Mic, MicOff, Eye, EyeOff } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
-import { UnifiedPipeline, AppMode } from "../app/lib/unified-pipeline";
+import { UnifiedPipeline, InferenceMode } from "../app/lib/unified-pipeline";
 import { Timeline } from "./timeline";
-import { ModeSwitcher } from "./mode-switcher";
+import { InferenceModeSwitcher } from "./inference-mode-switcher";
 import { StatsPanel } from "./stats-panel";
 import { EventData } from "../app/lib/event-tracker";
 
@@ -28,7 +28,7 @@ export function Chat() {
   const [conversationStartTime, setConversationStartTime] = useState<
     number | null
   >(null);
-  const [mode, setMode] = useState<AppMode>("text");
+  const [mode, setMode] = useState<InferenceMode>("text");
   const [isListening, setIsListening] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState<string>("af_heart");
   const [availableVoices, setAvailableVoices] = useState<Record<string, any>>(
@@ -143,7 +143,7 @@ export function Chat() {
     };
   }, []);
 
-  const handleModeChange = async (newMode: AppMode) => {
+  const handleModeChange = async (newMode: InferenceMode) => {
     if (!pipelineRef.current || newMode === mode) return;
 
     setModelLoading(true);
@@ -226,7 +226,7 @@ export function Chat() {
         <div className="bg-card border-b px-6 py-2 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <ModeSwitcher
+              <InferenceModeSwitcher
                 currentMode={mode}
                 onModeChange={handleModeChange}
                 disabled={modelLoading || isLoading}
