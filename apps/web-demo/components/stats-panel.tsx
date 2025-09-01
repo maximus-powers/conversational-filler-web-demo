@@ -59,10 +59,11 @@ export function StatsPanel({
     })).sort((a, b) => a.timestamp - b.timestamp);
     
     // calc metrics
+    const turnStartTime = allEvents.length > 0 ? allEvents[0].timestamp : conversationStartTime;
     const firstResponse = allEvents.find(e => e.eventName === "LocalLMResponse");
     const firstThought = allEvents.find(e => e.eventName === "ThoughtApiFirstToken");
-    const timeToFirstResponse = firstResponse ? firstResponse.timestamp - conversationStartTime : 0;
-    const timeToFirstThought = firstThought ? firstThought.timestamp - conversationStartTime : 0;
+    const timeToFirstResponse = firstResponse ? firstResponse.timestamp - turnStartTime : 0;
+    const timeToFirstThought = firstThought ? firstThought.timestamp - turnStartTime : 0;
     
     const processTimeline: ProcessSegment[] = [];
     
@@ -170,16 +171,7 @@ export function StatsPanel({
   }, [eventData, conversationStartTime]);
   
   if (!metrics || !conversationStartTime) {
-    return (
-      <div className="bg-card border-b px-6 py-4">
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">Waiting for conversation...</span>
-          </div>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   // timeline scale - use last turn's timeframe instead of full conversation

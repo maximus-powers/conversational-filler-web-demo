@@ -2,7 +2,7 @@
 
 import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
-import { Bot, User, Loader2, Send, Mic, MicOff } from "lucide-react";
+import { Bot, User, Loader2, Send, Mic, MicOff, Eye, EyeOff } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import { UnifiedPipeline, AppMode } from "../app/lib/unified-pipeline";
 import { Timeline } from "./timeline";
@@ -36,6 +36,8 @@ export function Chat() {
   );
   const [thoughtProvider, setThoughtProvider] = useState<"gemini" | "none">("gemini");
   const [selectedModel, setSelectedModel] = useState<"maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct">("maximuspowers/smollm-convo-filler-onnx-official");
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [showStatsPanel, setShowStatsPanel] = useState(true);
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -211,15 +213,17 @@ export function Chat() {
 
   return (
     <div className="flex h-full w-full overflow-hidden">
-      <Timeline
-        eventData={eventData}
-        conversationStartTime={conversationStartTime}
-        mode={mode}
-      />
+      {showTimeline && (
+        <Timeline
+          eventData={eventData}
+          conversationStartTime={conversationStartTime}
+          mode={mode}
+        />
+      )}
 
       <div className="flex-1 flex flex-col min-w-0">
         {/* Chat Header */}
-        <div className="bg-card border-b px-6 py-3 flex-shrink-0">
+        <div className="bg-card border-b px-6 py-2 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <ModeSwitcher
@@ -232,7 +236,7 @@ export function Chat() {
                 <select
                   value={selectedVoice}
                   onChange={(e) => setSelectedVoice(e.target.value)}
-                  className="text-sm px-2 py-1 border rounded-md bg-background"
+                  className="text-sm px-2 border rounded-md bg-background"
                   disabled={modelLoading}
                 >
                   {Object.entries(availableVoices).map(
@@ -248,7 +252,7 @@ export function Chat() {
               <select
                 value={thoughtProvider}
                 onChange={(e) => setThoughtProvider(e.target.value as "gemini" | "none")}
-                className="text-sm px-2 py-1 border rounded-md bg-background"
+                className="text-sm px-2 py-1 border rounded-md bg-background h-8"
                 disabled={modelLoading}
                 title="Select thought provider"
               >
@@ -259,7 +263,7 @@ export function Chat() {
               <select
                 value={selectedModel}
                 onChange={(e) => setSelectedModel(e.target.value as "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct")}
-                className="text-sm px-2 py-1 border rounded-md bg-background"
+                className="text-sm px-2 py-1 border rounded-md bg-background h-8"
                 disabled={modelLoading}
                 title="Select SmolLM model"
               >
@@ -269,6 +273,26 @@ export function Chat() {
             </div>
 
             <div className="flex items-center gap-2">
+              <Button
+                onClick={() => setShowTimeline(!showTimeline)}
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-1"
+              >
+                {showTimeline ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                Timeline
+              </Button>
+
+              <Button
+                onClick={() => setShowStatsPanel(!showStatsPanel)}
+                variant="outline"
+                size="sm"
+                className="flex items-center gap-1"
+              >
+                {showStatsPanel ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                Stats Panel
+              </Button>
+
               <Button
                 onClick={clearChat}
                 variant="outline"
@@ -283,31 +307,23 @@ export function Chat() {
           </div>
 
           {/* Status Bar */}
-          <div className="mt-2 text-sm text-muted-foreground flex items-center gap-2">
-            {modelLoading ? (
-              modelLoadingProgress || "Loading models..."
-            ) : mode === "text" ? (
-              ""
-            ) : (
-              <>
-                {isListening ? (
-                  <div className="flex items-center gap-2">
-                    <Mic className="h-4 w-4 text-green-500 animate-pulse" />
-                    <span className="text-green-500">Listening...</span>
-                  </div>
-                ) : (
-                  ""
-                )}
-              </>
-            )}
-          </div>
+          {mode === "voice" && isListening && (
+            <div className="mt-2 text-sm text-muted-foreground flex items-center gap-2">
+              <div className="flex items-center gap-2">
+                <Mic className="h-4 w-4 text-green-500 animate-pulse" />
+                <span className="text-green-500">Listening...</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Stats Panel */}
-        <StatsPanel 
-          eventData={eventData}
-          conversationStartTime={conversationStartTime}
-        />
+        {showStatsPanel && (
+          <StatsPanel 
+            eventData={eventData}
+            conversationStartTime={conversationStartTime}
+          />
+        )}
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-4 py-3 bg-background">
@@ -319,7 +335,7 @@ export function Chat() {
               </h2>
               <p className="text-sm max-w-md">
                 {mode === "text"
-                  ? "Type a message below to start chatting with SmolLM, enhanced by OpenAI for context."
+                  ? "Type a message below to start chatting with SmolLM, enhanced with context from Gemini."
                   : "Just start speaking! I'm listening and will respond with voice."}
               </p>
               {modelLoading && (

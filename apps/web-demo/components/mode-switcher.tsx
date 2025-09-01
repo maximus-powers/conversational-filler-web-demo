@@ -20,9 +20,9 @@ export function ModeSwitcher({
         size="sm"
         onClick={() => onModeChange("text")}
         disabled={disabled}
-        className="h-7 px-2"
+        className="h-6 px-2"
       >
-        <MessageSquare className="h-3 w-3 mr-1" />
+        <MessageSquare className="h-2 w-3 mr-1" />
         <span className="text-xs font-medium">Text</span>
       </Button>
       <Button
@@ -30,9 +30,9 @@ export function ModeSwitcher({
         size="sm"
         onClick={() => onModeChange("voice")}
         disabled={disabled}
-        className="h-7 px-2"
+        className="h-6 px-2"
       >
-        <Mic className="h-3 w-3 mr-1" />
+        <Mic className="h-2 w-3 mr-1" />
         <span className="text-xs font-medium">Voice</span>
       </Button>
     </div>
