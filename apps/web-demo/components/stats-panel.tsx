@@ -8,7 +8,7 @@ import { EventData, EventName } from "../app/lib/event-tracker";
 export interface ConversationMetrics {
   timeToFirstResponse: number;
   timeToFirstThought: number;
-  averageLatencyReduction: number;
+  latencyReduction: number;
   processTimeline: ProcessSegment[];
   thoughtTimeline: ThoughtSegment[];
 }
@@ -154,10 +154,16 @@ export function StatsPanel({
       lastThoughtTime = thought.timestamp;
     });
     
+    const firstThoughtParsed = allEvents.find(e => e.eventName === "ThoughtParsed");
+    const firstSmolLMEnd = allEvents.find(e => e.eventName === "LocalLMResponse");
+    const latencyReduction = firstThoughtParsed && firstSmolLMEnd 
+      ? Math.max(0, firstThoughtParsed.timestamp - firstSmolLMEnd.timestamp)
+      : 0;
+
     return {
       timeToFirstResponse,
       timeToFirstThought,
-      averageLatencyReduction: timeToFirstThought > 0 ? Math.max(0, timeToFirstThought - timeToFirstResponse) : 0,
+      latencyReduction: latencyReduction,
       processTimeline: processTimeline.sort((a, b) => a.startTime - b.startTime),
       thoughtTimeline: thoughtTimeline.sort((a, b) => a.startTime - b.startTime)
     };
@@ -215,8 +221,8 @@ export function StatsPanel({
           <TrendingDown className="h-4 w-4 text-purple-500" />
           <span className="text-sm font-medium">Latency Reduction:</span>
           <span className="text-sm font-mono text-purple-600">
-            {metrics.averageLatencyReduction > 0 
-              ? `${formatTime(metrics.averageLatencyReduction)}`
+            {metrics.latencyReduction > 0 
+              ? `${formatTime(metrics.latencyReduction)}`
               : 'N/A'
             }
           </span>
@@ -242,7 +248,6 @@ export function StatsPanel({
                 const intervalMs = i * 500; // Every 0.5 seconds
                 if (intervalMs < durationMs) {
                   const position = (intervalMs / durationMs) * 100;
-                  const isFullSecond = i % 2 === 0;
                   marks.push(
                     <div
                       key={i}
@@ -283,7 +288,6 @@ export function StatsPanel({
           ].sort((a, b) => a.startTime - b.startTime);
 
           const firstSmolLMSegment = allSegments.find(s => s.category === 'process' && s.type === 'smollm');
-          const apiLatencySegment = allSegments.find(s => s.category === 'thought' && s.label === 'API Latency');
 
           return allSegments.map((segment, index) => {
             const left = ((segment.startTime - turnStartTime) / totalDuration) * 100;
@@ -393,9 +397,11 @@ export function StatsPanel({
                   </Tooltip>
                   
                   {/* Latency reduction line */}
-                  {isFirstSmolLM && firstSmolLMSegment && apiLatencySegment && (() => {
-                    const reductionMs = apiLatencySegment.endTime - firstSmolLMSegment.endTime;
-                    const lineWidth = ((apiLatencySegment.endTime - turnStartTime) / totalDuration) * 100 - (left + width);
+                  {isFirstSmolLM && firstSmolLMSegment && (() => {
+                    const firstThoughtParsed = waterfallEvents.find(e => e.eventName === "ThoughtParsed");
+                    if (!firstThoughtParsed) return null;
+                    const reductionMs = firstThoughtParsed.timestamp - firstSmolLMSegment.endTime;
+                    const lineWidth = ((firstThoughtParsed.timestamp - turnStartTime) / totalDuration) * 100 - (left + width);
                     
                     return (
                       <div

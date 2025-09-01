@@ -56,27 +56,34 @@ export function Timeline({
   
   const events: TimelineDisplayEvent[] = React.useMemo(() => {
     if (!eventData?.turns?.length) return [];
-    const allEvents: TimelineDisplayEvent[] = [];
-    eventData.turns.forEach((turn, turnIndex) => {
-      turn.timeline.forEach((event, eventIndex) => {
-        const timestamp = new Date(event.timestamp).getTime();
-        allEvents.push({
-          id: `${turnIndex}-${eventIndex}`,
-          timestamp,
-          type: event.eventName,
-          message: getEventMessage(event.eventName, event),
-          content: event.text || event.prompt || event.response || "",
-          fullContent: event.text || event.prompt || event.response || ""
-        });
+    
+    // Only show events from the last turn (matching stats panel behavior)
+    const lastTurn = eventData.turns[eventData.turns.length - 1];
+    const turnEvents: TimelineDisplayEvent[] = [];
+    
+    lastTurn.timeline.forEach((event, eventIndex) => {
+      const timestamp = new Date(event.timestamp).getTime();
+      turnEvents.push({
+        id: `${eventData.turns.length - 1}-${eventIndex}`,
+        timestamp,
+        type: event.eventName,
+        message: getEventMessage(event.eventName, event),
+        content: event.text || event.prompt || event.response || "",
+        fullContent: event.text || event.prompt || event.response || ""
       });
     });
     
-    return allEvents.sort((a, b) => a.timestamp - b.timestamp);
+    return turnEvents.sort((a, b) => a.timestamp - b.timestamp);
   }, [eventData]);
   
   const getRelativeTime = (timestamp: number) => {
-    if (!conversationStartTime) return "0ms";
-    return `${timestamp - conversationStartTime}ms`;
+    if (!eventData?.turns?.length) return "0ms";
+    
+    // Use the start time of the current turn instead of conversation start
+    const lastTurn = eventData.turns[eventData.turns.length - 1];
+    const turnStartTime = new Date(lastTurn.timeline[0]?.timestamp || 0).getTime();
+    
+    return `${timestamp - turnStartTime}ms`;
   };
 
   const getEventIcon = (type: EventName) => {
