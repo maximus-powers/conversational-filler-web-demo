@@ -23,7 +23,7 @@ async function buildWorker() {
       },
       define: {
         'process.env.NODE_ENV': '"production"',
-        'import.meta.url': '"https://localhost:3000/"', // TODO: need to figure out what this is for and what it should be in prod
+        'import.meta.url': '"https://localhost:3000/"', 
       },
       banner: {
         js: `

@@ -18,26 +18,55 @@ interface Message {
   thoughts?: string[];
 }
 
-export function Chat() {
+type ModelConfig = {
+  localModel: string | null;
+  thoughtModel: "gemini" | "none";
+};
+
+export function Chat({
+  feedbackMode = false,
+  config,
+  voiceMode = false,
+  disabled = false,
+  onTurnComplete,
+}: {
+  feedbackMode?: boolean;
+  config?: ModelConfig;
+  voiceMode?: boolean;
+  disabled?: boolean;
+  onTurnComplete?: (prompts: Array<{
+    prompt: string;
+    thought: string | null;
+    generatedResponse: string;
+  }>) => void;
+} = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [modelLoading, setModelLoading] = useState(true);
   const [modelLoadingProgress, setModelLoadingProgress] = useState<string>("");
   const [eventData, setEventData] = useState<EventData | null>(null);
+  const [currentUserPrompt, setCurrentUserPrompt] = useState<string>("");
+  const [currentTurnResponse, setCurrentTurnResponse] = useState<string>("");
+  const [responseCompleteTimeout, setResponseCompleteTimeout] = useState<NodeJS.Timeout | null>(null);
+  const [currentAssistantMessageId, setCurrentAssistantMessageId] = useState<string | null>(null);
   const [conversationStartTime, setConversationStartTime] = useState<
     number | null
   >(null);
-  const [mode, setMode] = useState<InferenceMode>("text");
+  const [mode, setMode] = useState<InferenceMode>(voiceMode ? "voice" : "text");
   const [isListening, setIsListening] = useState(false);
   const [selectedVoice, setSelectedVoice] = useState<string>("af_heart");
   const [availableVoices, setAvailableVoices] = useState<Record<string, any>>(
     {},
   );
-  const [thoughtProvider, setThoughtProvider] = useState<"gemini" | "none">("gemini");
-  const [selectedModel, setSelectedModel] = useState<"maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct">("maximuspowers/smollm-convo-filler-onnx-official");
-  const [showTimeline, setShowTimeline] = useState(false);
-  const [showStatsPanel, setShowStatsPanel] = useState(true);
+  const [thoughtProvider, setThoughtProvider] = useState<"gemini" | "none">(
+    config?.thoughtModel || "gemini"
+  );
+  const [selectedModel, setSelectedModel] = useState<"maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct">(
+    (config?.localModel as any) || "maximuspowers/smollm-convo-filler-onnx-official"
+  );
+  const [showTimeline, setShowTimeline] = useState(!feedbackMode);
+  const [showStatsPanel, setShowStatsPanel] = useState(!feedbackMode);
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -46,7 +75,6 @@ export function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  // Remove old metrics code
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
@@ -57,6 +85,34 @@ export function Chat() {
     if (pipelineRef.current) {
       pipelineRef.current.resetEventData();
     }
+  };
+
+  const handleResponseComplete = (messageId: string, fullResponse: string) => {    
+    if (feedbackMode && onTurnComplete) {
+      const turnData = [{
+        prompt: currentUserPrompt || "User message",
+        thought: null, // TODO: extract actual thought data
+        generatedResponse: fullResponse,
+      }];
+      onTurnComplete(turnData);
+    }
+  };
+
+  const scheduleResponseComplete = (messageId: string) => {
+    if (responseCompleteTimeout) {
+      clearTimeout(responseCompleteTimeout);
+    }
+    
+    // 500ms after complete it triggers questionaire
+    const timeout = setTimeout(() => {
+      const message = messagesRef.current.get(messageId);
+      if (message) {
+        const fullResponse = message.processedContent || message.content;
+        handleResponseComplete(messageId, fullResponse || "");
+      }
+    }, 500);
+    
+    setResponseCompleteTimeout(timeout);
   };
 
   // init pipeline
@@ -85,6 +141,17 @@ export function Chat() {
             }
             return [...prev, message];
           });
+
+          if (role === "assistant") {
+            setIsLoading(false);
+            const msgId = messageId || Date.now().toString();
+            setCurrentAssistantMessageId(msgId);
+            if (feedbackMode) {
+              setTimeout(() => {
+                scheduleResponseComplete(msgId);
+              }, 3000); // 3 seconds as fallback
+            }
+          }
         },
 
         onMessageUpdated: (messageId, newContent) => {
@@ -92,14 +159,19 @@ export function Chat() {
             prev.map((msg) => {
               if (msg.id === messageId) {
                 const currentContent = msg.processedContent || msg.content;
-                return {
+                const updatedMessage = {
                   ...msg,
                   processedContent: currentContent + " " + newContent,
                 };
+                messagesRef.current.set(messageId, updatedMessage);
+                return updatedMessage;
               }
               return msg;
             }),
           );
+          if (feedbackMode && messageId === currentAssistantMessageId) {
+            scheduleResponseComplete(messageId);
+          }
         },
 
 
@@ -112,6 +184,14 @@ export function Chat() {
             setIsListening(true);
           } else if (status === "recording_end") {
             setIsListening(false);
+          } else if (status === "response_complete" || status === "processing_complete" || status === "generation_complete") {
+            if (feedbackMode && currentAssistantMessageId) {
+              const message = messagesRef.current.get(currentAssistantMessageId);
+              if (message) {
+                const fullResponse = message.processedContent || message.content;
+                handleResponseComplete(currentAssistantMessageId, fullResponse);
+              }
+            }
           }
         },
 
@@ -130,7 +210,8 @@ export function Chat() {
         console.log(`Models loaded in ${loadTime}s`);
       } catch (error) {
         console.error("Failed to initialize pipeline:", error);
-        setModelLoadingProgress("Failed to load models");
+        setModelLoadingProgress("Failed to load models - continuing in fallback mode");
+        setModelLoading(false);
       }
     };
 
@@ -165,12 +246,16 @@ export function Chat() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || modelLoading || !pipelineRef.current)
+    if (!input.trim() || isLoading || modelLoading || disabled)
       return;
 
     const currentInput = input;
     setInput("");
     setIsLoading(true);
+    
+    if (feedbackMode) {
+      setCurrentUserPrompt(currentInput);
+    }
 
     // clear timeline
     if (messages.length === 0) {
@@ -178,10 +263,41 @@ export function Chat() {
     }
 
     try {
-      await pipelineRef.current.processText(currentInput);
+      if (pipelineRef.current) {
+        await pipelineRef.current.processText(currentInput);
+      } else {
+        // todo: remove this
+
+        const userMessage: Message = {
+          id: Date.now().toString(),
+          role: "user",
+          content: currentInput,
+          processedContent: currentInput,
+        };
+        setMessages(prev => [...prev, userMessage]);
+        
+        setTimeout(() => {
+          const aiMessageId = (Date.now() + 1).toString();
+          const aiMessage: Message = {
+            id: aiMessageId,
+            role: "assistant", 
+            content: "This is a fallback response since the AI pipeline is not available.",
+            processedContent: "This is a fallback response since the AI pipeline is not available.",
+          };
+          setMessages(prev => [...prev, aiMessage]);
+          messagesRef.current.set(aiMessageId, aiMessage);
+          
+          setIsLoading(false);
+          
+          if (feedbackMode) {
+            setCurrentAssistantMessageId(aiMessageId);
+            scheduleResponseComplete(aiMessageId);
+          }
+        }, 1000);
+        return;
+      }
     } catch (error) {
       console.error("Text processing error:", error);
-    } finally {
       setIsLoading(false);
     }
   };
@@ -191,6 +307,11 @@ export function Chat() {
     messagesRef.current.clear();
     clearEventData();
     setIsLoading(false);
+    if (responseCompleteTimeout) {
+      clearTimeout(responseCompleteTimeout);
+      setResponseCompleteTimeout(null);
+    }
+    setCurrentAssistantMessageId(null);
   };
 
   useEffect(() => {
@@ -223,99 +344,101 @@ export function Chat() {
 
       <div className="flex-1 flex flex-col min-w-0">
         {/* Chat Header */}
-        <div className="bg-card border-b px-6 py-2 flex-shrink-0">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <InferenceModeSwitcher
-                currentMode={mode}
-                onModeChange={handleModeChange}
-                disabled={modelLoading || isLoading}
-              />
-
-              {mode === "voice" && Object.keys(availableVoices).length > 0 && (
-                <select
-                  value={selectedVoice}
-                  onChange={(e) => setSelectedVoice(e.target.value)}
-                  className="text-sm px-2 border rounded-md bg-background"
-                  disabled={modelLoading}
-                >
-                  {Object.entries(availableVoices).map(
-                    ([id, voice]: [string, any]) => (
-                      <option key={id} value={id}>
-                        {voice.name || id}
-                      </option>
-                    ),
-                  )}
-                </select>
-              )}
-
-              <select
-                value={thoughtProvider}
-                onChange={(e) => setThoughtProvider(e.target.value as "gemini" | "none")}
-                className="text-sm px-2 py-1 border rounded-md bg-background h-8"
-                disabled={modelLoading}
-                title="Select thought provider"
-              >
-                <option value="gemini">Google (Gemini)</option>
-                <option value="none">None</option>
-              </select>
-
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value as "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct")}
-                className="text-sm px-2 py-1 border rounded-md bg-background h-8"
-                disabled={modelLoading}
-                title="Select SmolLM model"
-              >
-                <option value="maximuspowers/smollm-convo-filler-onnx-official">SmolLM Convo Filler</option>
-                <option value="HuggingFaceTB/SmolLM-360M-Instruct">SmolLM 360M Instruct</option>
-              </select>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                onClick={() => setShowTimeline(!showTimeline)}
-                variant="outline"
-                size="sm"
-                className="flex items-center gap-1"
-              >
-                {showTimeline ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                Timeline
-              </Button>
-
-              <Button
-                onClick={() => setShowStatsPanel(!showStatsPanel)}
-                variant="outline"
-                size="sm"
-                className="flex items-center gap-1"
-              >
-                {showStatsPanel ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
-                Stats Panel
-              </Button>
-
-              <Button
-                onClick={clearChat}
-                variant="outline"
-                size="sm"
-                disabled={messages.length === 0}
-              >
-                Clear Chat
-              </Button>
-
-              <ThemeToggle />
-            </div>
-          </div>
-
-          {/* Status Bar */}
-          {mode === "voice" && isListening && (
-            <div className="mt-2 text-sm text-muted-foreground flex items-center gap-2">
+        {!feedbackMode && (
+          <div className="bg-card border-b px-6 py-2 flex-shrink-0">
+            <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Mic className="h-4 w-4 text-green-500 animate-pulse" />
-                <span className="text-green-500">Listening...</span>
+                <InferenceModeSwitcher
+                  currentMode={mode}
+                  onModeChange={handleModeChange}
+                  disabled={modelLoading || isLoading}
+                />
+
+                {mode === "voice" && Object.keys(availableVoices).length > 0 && (
+                  <select
+                    value={selectedVoice}
+                    onChange={(e) => setSelectedVoice(e.target.value)}
+                    className="text-sm px-2 border rounded-md bg-background"
+                    disabled={modelLoading}
+                  >
+                    {Object.entries(availableVoices).map(
+                      ([id, voice]: [string, any]) => (
+                        <option key={id} value={id}>
+                          {voice.name || id}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                )}
+
+                <select
+                  value={thoughtProvider}
+                  onChange={(e) => setThoughtProvider(e.target.value as "gemini" | "none")}
+                  className="text-sm px-2 py-1 border rounded-md bg-background h-8"
+                  disabled={modelLoading}
+                  title="Select thought provider"
+                >
+                  <option value="gemini">Google (Gemini)</option>
+                  <option value="none">None</option>
+                </select>
+
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value as "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct")}
+                  className="text-sm px-2 py-1 border rounded-md bg-background h-8"
+                  disabled={modelLoading}
+                  title="Select SmolLM model"
+                >
+                  <option value="maximuspowers/smollm-convo-filler-onnx-official">SmolLM Convo Filler</option>
+                  <option value="HuggingFaceTB/SmolLM-360M-Instruct">SmolLM 360M Instruct</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={() => setShowTimeline(!showTimeline)}
+                  variant="outline"
+                  size="sm"
+                  className="flex items-center gap-1"
+                >
+                  {showTimeline ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                  Timeline
+                </Button>
+
+                <Button
+                  onClick={() => setShowStatsPanel(!showStatsPanel)}
+                  variant="outline"
+                  size="sm"
+                  className="flex items-center gap-1"
+                >
+                  {showStatsPanel ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                  Stats Panel
+                </Button>
+
+                <Button
+                  onClick={clearChat}
+                  variant="outline"
+                  size="sm"
+                  disabled={messages.length === 0}
+                >
+                  Clear Chat
+                </Button>
+
+                <ThemeToggle />
               </div>
             </div>
-          )}
-        </div>
+
+            {/* Status Bar */}
+            {mode === "voice" && isListening && (
+              <div className="mt-2 text-sm text-muted-foreground flex items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <Mic className="h-4 w-4 text-green-500 animate-pulse" />
+                  <span className="text-green-500">Listening...</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Stats Panel */}
         {showStatsPanel && (
@@ -416,11 +539,11 @@ export function Chat() {
                     : "Type your message..."
               }
               className="flex-1 px-4 py-2 border rounded-lg bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={isLoading || modelLoading}
+              disabled={isLoading || modelLoading || disabled}
             />
             <Button
               type="submit"
-              disabled={!input.trim() || isLoading || modelLoading}
+              disabled={!input.trim() || isLoading || modelLoading || disabled}
             >
               <Send className="h-4 w-4 mr-2" />
               Send
