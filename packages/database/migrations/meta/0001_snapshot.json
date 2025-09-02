@@ -1,0 +1,112 @@
+{
+  "id": "0e98dcb5-af98-47fe-99ac-deb9a5ca7df1",
+  "prevId": "b6597b0c-a991-4dca-bf4f-06fdd0fa057b",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.feedback_data": {
+      "name": "feedback_data",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "conversation_id": {
+          "name": "conversation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "local_model": {
+          "name": "local_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "thought_model": {
+          "name": "thought_model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "voice_mode": {
+          "name": "voice_mode",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "prompts": {
+          "name": "prompts",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ab_config": {
+          "name": "ab_config",
+          "type": "json",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ab_result": {
+          "name": "ab_result",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "answer_quality": {
+          "name": "answer_quality",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "speed_perception": {
+          "name": "speed_perception",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rlfh_response": {
+          "name": "rlfh_response",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "misc_notes": {
+          "name": "misc_notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "views": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

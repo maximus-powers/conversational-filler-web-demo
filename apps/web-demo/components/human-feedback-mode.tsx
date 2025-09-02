@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@convo-filler/ui/components/button";
 import { Chat } from "./chat";
+import { EventData } from "../app/lib/event-tracker";
 
 type WorkflowState = "intro" | "chat" | "questionnaire" | "complete";
 
@@ -28,6 +29,7 @@ type ConversationData = {
     thought: string | null;
     generatedResponse: string;
   }>;
+  events?: EventData;
 };
 
 const MODEL_CONFIGS = [
@@ -68,7 +70,15 @@ export function HumanFeedbackMode({
   };
 
   const startNewConversation = () => {
-    const isVoiceMode = conversationCount >= 3; // Last 2 conversations are voice mode
+    const newCount = conversationCount + 1;
+    
+    if (newCount >= 5) {
+      setWorkflowState("complete");
+      return;
+    }
+    
+    setConversationCount(newCount);
+    const isVoiceMode = newCount >= 3; // last 2 conversations are voice mode
     const config = getRandomConfig();
     
     setCurrentConversation({
@@ -81,11 +91,12 @@ export function HumanFeedbackMode({
     setWorkflowState("chat");
   };
 
-  const handleTurnComplete = (prompts: ConversationData["prompts"]) => {
+  const handleTurnComplete = (prompts: ConversationData["prompts"], events?: EventData) => {
     if (currentConversation) {
       setCurrentConversation({
         ...currentConversation,
         prompts,
+        events,
       });
       
       if (prompts.length > 0) {
@@ -111,6 +122,7 @@ export function HumanFeedbackMode({
       thoughtModel: currentConversation.config.thoughtModel,
       voiceMode: currentConversation.voiceMode,
       prompts: currentConversation.prompts,
+      events: currentConversation.events,
       ...data,
     };
 
@@ -133,21 +145,9 @@ export function HumanFeedbackMode({
       const result = await response.json();
       console.log('Feedback saved successfully:', result);
 
-      // Move to next conversation or complete
-      const newCount = conversationCount + 1;
-      setConversationCount(newCount);
-      
-      if (newCount >= 5) {
-        setWorkflowState("complete");
-      } else {
-        // Wait a moment before starting new conversation
-        setTimeout(() => {
-          startNewConversation();
-        }, 1000);
-      }
+      setWorkflowState("chat");
     } catch (error) {
       console.error("Error saving feedback:", error);
-      // Handle error appropriately
     }
   };
 
@@ -163,16 +163,16 @@ export function HumanFeedbackMode({
         <div className="max-w-2xl text-center space-y-6">
           <h2 className="text-3xl font-bold text-foreground">Human Feedback Data Collection</h2>
           <div className="space-y-4 text-left">
-            <p className="text-foreground">Welcome to our research study! Here's what you'll be doing:</p>
+            <p className="text-foreground">Welcome to our research study! Here&apos;s what you&apos;ll be doing:</p>
             <ul className="list-disc list-inside space-y-2 text-foreground">
-              <li>You'll have <strong>5 conversations</strong> with our AI system</li>
+              <li>You&apos;ll have <strong>5 self-led conversations</strong> in our chat interface</li>
               <li>The first <strong>3 conversations</strong> will be in text mode</li>
               <li>The last <strong>2 conversations</strong> will be in voice mode</li>
-              <li>Each conversation should be <strong>2-3 turns</strong> long</li>
-              <li>After each turn, you'll fill out a brief questionnaire</li>
-              <li>We'll randomly select different AI configurations for each conversation</li>
+              <li>Aim for each conversation to be <strong>2-3 turns</strong> long</li>
+              <li>After each turn, you&apos;ll fill out a brief questionnaire</li>
+              <li>We&apos;ll randomly select different architecture configurations for each conversation</li>
             </ul>
-            <p className="text-foreground">Your responses will help us improve our conversational AI system. Thank you for participating!</p>
+            <p className="text-foreground">Your feedback will be used to improve our conversational model, and for our study into the quality/speed of this novel architecture. Thank you for participating!</p>
           </div>
           <Button onClick={startWorkflow} size="lg">
             Start Data Collection
@@ -187,7 +187,7 @@ export function HumanFeedbackMode({
       <div className="h-full flex items-center justify-center p-8">
         <div className="max-w-2xl text-center space-y-6">
           <h2 className="text-3xl font-bold text-foreground">Thank You!</h2>
-          <p className="text-foreground">You've completed all 5 conversations. Your feedback has been recorded and will help us improve our AI system.</p>
+          <p className="text-foreground">You&apos;ve completed 5 conversations. Your feedback has been recorded and will be used in our study comparing the various architectures you tested. Thanks!</p>
           <Button onClick={resetWorkflow} variant="outline">
             Start Over
           </Button>

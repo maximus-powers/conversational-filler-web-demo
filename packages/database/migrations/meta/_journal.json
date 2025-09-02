@@ -8,6 +8,13 @@
       "when": 1756764607892,
       "tag": "0000_boring_skullbuster",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1756782425663,
+      "tag": "0001_nostalgic_anthem",
+      "breakpoints": true
     }
   ]
 }

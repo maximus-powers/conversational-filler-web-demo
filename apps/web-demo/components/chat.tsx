@@ -38,7 +38,7 @@ export function Chat({
     prompt: string;
     thought: string | null;
     generatedResponse: string;
-  }>) => void;
+  }>, events?: EventData) => void;
 } = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -94,7 +94,7 @@ export function Chat({
         thought: null, // TODO: extract actual thought data
         generatedResponse: fullResponse,
       }];
-      onTurnComplete(turnData);
+      onTurnComplete(turnData, eventData || undefined);
     }
   };
 

@@ -11,8 +11,7 @@ export async function POST(request: NextRequest) {
       thoughtModel,
       voiceMode,
       prompts,
-      abConfig,
-      abResult,
+      events,
       answerQuality,
       speedPerception,
       rlfhResponse,
@@ -24,8 +23,6 @@ export async function POST(request: NextRequest) {
       thoughtModel === undefined ||
       voiceMode === undefined ||
       !prompts ||
-      !abConfig ||
-      abResult === undefined ||
       !answerQuality ||
       !speedPerception ||
       !rlfhResponse
@@ -50,8 +47,7 @@ export async function POST(request: NextRequest) {
       thoughtModel,
       voiceMode,
       prompts,
-      abConfig,
-      abResult,
+      events,
       answerQuality,
       speedPerception,
       rlfhResponse,
