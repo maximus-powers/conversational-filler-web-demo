@@ -7,28 +7,19 @@ import { Button } from "@convo-filler/ui/components/button";
 
 type Mode = "demo" | "feedback";
 
-type ModelConfig = {
-  localModel: string | null;
-  thoughtModel: "gemini" | "none";
-};
-
 export default function Page() {
   const [mode, setMode] = useState<Mode>("demo");
   const [showQuestionnaire, setShowQuestionnaire] = useState(false);
   const [questionnaireData, setQuestionnaireData] = useState<{
     originalResponse: string;
-    alternativeResponse: string;
     originalPrompt: string;
-    abConfig: ModelConfig;
     voiceMode: boolean;
     onSubmit: (data: any) => void;
   } | null>(null);
 
   const handleShowQuestionnaire = (data: {
     originalResponse: string;
-    alternativeResponse: string;
     originalPrompt: string;
-    abConfig: ModelConfig;
     voiceMode: boolean;
     onSubmit: (data: any) => void;
   }) => {
@@ -93,9 +84,7 @@ export default function Page() {
           <div className="max-w-7xl mx-auto">
             <Questionnaire
               originalResponse={questionnaireData.originalResponse}
-              alternativeResponse={questionnaireData.alternativeResponse}
               originalPrompt={questionnaireData.originalPrompt}
-              abConfig={questionnaireData.abConfig}
               voiceMode={questionnaireData.voiceMode}
               onSubmit={handleQuestionnaireSubmit}
             />

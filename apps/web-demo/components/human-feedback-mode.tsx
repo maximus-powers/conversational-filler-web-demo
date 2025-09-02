@@ -22,7 +22,6 @@ type ModelConfig = {
 type ConversationData = {
   conversationId: string;
   config: ModelConfig;
-  abConfig: ModelConfig;
   voiceMode: boolean;
   prompts: Array<{
     prompt: string;
@@ -31,87 +30,18 @@ type ConversationData = {
   }>;
 };
 
-const AB_CONFIG_PAIRS = [
-  // text mode
-  {
-    voiceMode: false,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}, 
-    alternative: { localModel: "HuggingFaceTB/SmolLM-360M-Instruct" as const, thoughtModel: "gemini" as const}
-  },
-  {
-    voiceMode: false,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}, 
-    alternative: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "none" as const}
-  },
-  {
-    voiceMode: false,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "none" as const},
-    alternative: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}
-  },
-  {
-    voiceMode: false,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}, 
-    alternative: { localModel: null, thoughtModel: "gemini" as const}
-  },
-  {
-    voiceMode: false,
-    original: { localModel: null, thoughtModel: "gemini" as const},
-    alternative: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}
-  },
-  {
-    voiceMode: false,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}, 
-    alternative: { localModel: "HuggingFaceTB/SmolLM-360M-Instruct" as const, thoughtModel: "none" as const}
-  },
-  {
-    voiceMode: false,
-    original: { localModel: "HuggingFaceTB/SmolLM-360M-Instruct" as const, thoughtModel: "none" as const},
-    alternative: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const} 
-  },
-  // voice mode
-  {
-    voiceMode: true,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}, 
-    alternative: { localModel: "HuggingFaceTB/SmolLM-360M-Instruct" as const, thoughtModel: "gemini" as const}
-  },
-  {
-    voiceMode: true,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}, 
-    alternative: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "none" as const}
-  },
-  {
-    voiceMode: true,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "none" as const},
-    alternative: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}
-  },
-  {
-    voiceMode: true,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}, 
-    alternative: { localModel: null, thoughtModel: "gemini" as const}
-  },
-  {
-    voiceMode: true,
-    original: { localModel: null, thoughtModel: "gemini" as const},
-    alternative: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}
-  },
-  {
-    voiceMode: true,
-    original: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}, 
-    alternative: { localModel: "HuggingFaceTB/SmolLM-360M-Instruct" as const, thoughtModel: "none" as const}
-  },
-  {
-    voiceMode: true,
-    original: { localModel: "HuggingFaceTB/SmolLM-360M-Instruct" as const, thoughtModel: "none" as const},
-    alternative: { localModel: "maximuspowers/smollm-convo-filler-onnx-official" as const, thoughtModel: "gemini" as const}
-  },
+const MODEL_CONFIGS = [
+  { localModel: "maximuspowers/smollm-convo-filler-onnx-official", thoughtModel: "gemini" as const },
+  { localModel: "maximuspowers/smollm-convo-filler-onnx-official", thoughtModel: "none" as const },
+  { localModel: "HuggingFaceTB/SmolLM-360M-Instruct", thoughtModel: "gemini" as const },
+  { localModel: "HuggingFaceTB/SmolLM-360M-Instruct", thoughtModel: "none" as const },
+  { localModel: null, thoughtModel: "gemini" as const },
 ];
 
 interface HumanFeedbackModeProps {
   onShowQuestionnaire: (data: {
     originalResponse: string;
-    alternativeResponse: string;
     originalPrompt: string;
-    abConfig: ModelConfig;
     voiceMode: boolean;
     onSubmit: (data: any) => void;
   }) => void;
@@ -126,18 +56,9 @@ export function HumanFeedbackMode({
   const [conversationCount, setConversationCount] = useState(0);
   const [currentConversation, setCurrentConversation] = useState<ConversationData | null>(null);
   const [lastAiResponse, setLastAiResponse] = useState<string>("");
-  const [alternativeResponse, setAlternativeResponse] = useState<string>("");
 
-  const getRandomConfigPair = (voiceMode: boolean) => {
-    // Filter config pairs by voice mode
-    const relevantPairs = AB_CONFIG_PAIRS.filter(pair => pair.voiceMode === voiceMode);
-    return relevantPairs[Math.floor(Math.random() * relevantPairs.length)];
-  };
-
-  const generatePlaceholderAlternative = (originalResponse: string, abConfig: ModelConfig): string => {
-    // TODO: Replace with actual model inference using abConfig
-    // For now, just return failure message since we want real model differences
-    return "Failed to generate alternative";
+  const getRandomConfig = (): ModelConfig => {
+    return MODEL_CONFIGS[Math.floor(Math.random() * MODEL_CONFIGS.length)];
   };
 
   const startWorkflow = () => {
@@ -148,12 +69,11 @@ export function HumanFeedbackMode({
 
   const startNewConversation = () => {
     const isVoiceMode = conversationCount >= 3; // Last 2 conversations are voice mode
-    const configPair = getRandomConfigPair(isVoiceMode);
+    const config = getRandomConfig();
     
     setCurrentConversation({
       conversationId: generateUUID(),
-      config: configPair.original,
-      abConfig: configPair.alternative,
+      config: config,
       voiceMode: isVoiceMode,
       prompts: [],
     });
@@ -168,26 +88,17 @@ export function HumanFeedbackMode({
         prompts,
       });
       
-      // Capture the latest AI response for the questionnaire
-      let altResponse = "";
       if (prompts.length > 0) {
-        setLastAiResponse(prompts[prompts.length - 1].generatedResponse);
+        const latestPrompt = prompts[prompts.length - 1];
+        setLastAiResponse(latestPrompt.generatedResponse);
         
-        // Generate alternative response (placeholder for now - should use alternative model config)
-        const originalResponse = prompts[prompts.length - 1].generatedResponse;
-        altResponse = generatePlaceholderAlternative(originalResponse, currentConversation.abConfig);
-        setAlternativeResponse(altResponse);
+        onShowQuestionnaire({
+          originalResponse: latestPrompt.generatedResponse,
+          originalPrompt: latestPrompt.prompt,
+          voiceMode: currentConversation.voiceMode,
+          onSubmit: handleQuestionnaireSubmit,
+        });
       }
-      
-      // Show questionnaire using the parent callback
-      onShowQuestionnaire({
-        originalResponse: prompts.length > 0 ? prompts[prompts.length - 1].generatedResponse : "",
-        alternativeResponse: altResponse,
-        originalPrompt: prompts.length > 0 ? prompts[prompts.length - 1].prompt : "",
-        abConfig: currentConversation.abConfig,
-        voiceMode: currentConversation.voiceMode,
-        onSubmit: handleQuestionnaireSubmit,
-      });
     }
   };
 
@@ -200,7 +111,6 @@ export function HumanFeedbackMode({
       thoughtModel: currentConversation.config.thoughtModel,
       voiceMode: currentConversation.voiceMode,
       prompts: currentConversation.prompts,
-      abConfig: currentConversation.abConfig,
       ...data,
     };
 
@@ -304,12 +214,12 @@ export function HumanFeedbackMode({
         {/* Chat Section */}
         <div className="h-full">
           <Chat
-            key={currentConversation.conversationId} // Force remount on new conversation
+            key={currentConversation.conversationId}
             feedbackMode={true}
             config={currentConversation.config}
             voiceMode={currentConversation.voiceMode}
             onTurnComplete={handleTurnComplete}
-            disabled={questionnaireActive} // Disable chat input when questionnaire is shown
+            disabled={questionnaireActive}
           />
         </div>
       </div>

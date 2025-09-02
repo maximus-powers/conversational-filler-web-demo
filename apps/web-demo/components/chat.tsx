@@ -62,7 +62,7 @@ export function Chat({
   const [thoughtProvider, setThoughtProvider] = useState<"gemini" | "none">(
     config?.thoughtModel || "gemini"
   );
-  const [selectedModel, setSelectedModel] = useState<"maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct">(
+  const [selectedModel, setSelectedModel] = useState<"maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct" | "none">(
     (config?.localModel as any) || "maximuspowers/smollm-convo-filler-onnx-official"
   );
   const [showTimeline, setShowTimeline] = useState(!feedbackMode);
@@ -384,13 +384,14 @@ export function Chat({
 
                 <select
                   value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value as "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct")}
+                  onChange={(e) => setSelectedModel(e.target.value as "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct" | "none")}
                   className="text-sm px-2 py-1 border rounded-md bg-background h-8"
                   disabled={modelLoading}
                   title="Select SmolLM model"
                 >
                   <option value="maximuspowers/smollm-convo-filler-onnx-official">SmolLM Convo Filler</option>
                   <option value="HuggingFaceTB/SmolLM-360M-Instruct">SmolLM 360M Instruct</option>
+                  <option value="none">None (Gemini only)</option>
                 </select>
               </div>
 

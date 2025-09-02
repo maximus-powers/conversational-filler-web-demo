@@ -25,7 +25,7 @@ export interface UnifiedPipelineState {
   voices: Record<string, any>;
   currentMessageId: string | null;
   thoughtProvider: "gemini" | "none";
-  selectedModel: "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct";
+  selectedModel: "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct" | "none";
 }
 
 export class UnifiedPipeline {
@@ -349,6 +349,10 @@ export class UnifiedPipeline {
   }
 
   async processText(text: string) {
+    if (this.state.selectedModel === "none") {
+      return this.processTextWithGeminiStandalone(text);
+    }
+
     if (!this.worker || !this.isWorkerReady) {
       throw new Error("Pipeline not ready");
     }
@@ -375,6 +379,77 @@ export class UnifiedPipeline {
     });
   }
 
+  private async processTextWithGeminiStandalone(text: string) {
+    this.state.isProcessing = true;
+    this.state.currentMessageId = null;
+    
+    if (!this.eventTracker.hasActiveTurn()) {
+      this.startNewTurn();
+    }
+    
+    const userMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    this.config.onMessageReceived?.("user", text, userMessageId);
+    
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("UserInputReceived", { text });
+      this.config.onEventData?.(this.eventTracker.getData());
+    }
+
+    try {
+      const response = await fetch('/api/gemini-standalone', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: text }]
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.statusText}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body');
+      }
+
+      const assistantMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+      let fullResponse = "";
+      let firstToken = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = new TextDecoder().decode(value);
+        
+        if (chunk.includes('[first_token]')) {
+          firstToken = true;
+          this.config.onStatusChange?.("processing_complete", "");
+          continue;
+        }
+        
+        if (chunk.includes('[done]')) {
+          this.config.onStatusChange?.("response_complete", "");
+          this.state.isProcessing = false;
+          break;
+        }
+
+        fullResponse += chunk;        
+        if (firstToken) {
+          this.config.onMessageReceived?.("assistant", fullResponse, assistantMessageId);
+          this.config.onMessageUpdated?.(assistantMessageId, fullResponse);
+        }
+      }
+
+    } catch (error) {
+      console.error("Error in Gemini-standalone processing:", error);
+      this.config.onStatusChange?.("error", `Failed to process with Gemini: ${error}`);
+      this.state.isProcessing = false;
+    }
+  }
+
   setVoice(voice: string) {
     if (this.worker) {
       this.worker.postMessage({ type: "set_voice", voice });
@@ -388,9 +463,9 @@ export class UnifiedPipeline {
     }
   }
 
-  setModel(modelId: "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct") {
+  setModel(modelId: "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct" | "none") {
     this.state.selectedModel = modelId;
-    if (this.worker) {
+    if (this.worker && modelId !== "none") {
       this.worker.postMessage({ type: "set_model", modelId });
     }
   }

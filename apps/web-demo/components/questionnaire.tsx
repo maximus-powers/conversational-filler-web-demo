@@ -1,21 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@convo-filler/ui/components/button";
-
-type ModelConfig = {
-  localModel: string | null;
-  thoughtModel: "gemini" | "none";
-};
 
 type QuestionnaireProps = {
   originalResponse: string;
-  alternativeResponse: string;
   originalPrompt: string;
-  abConfig: ModelConfig;
   voiceMode: boolean;
   onSubmit: (data: {
-    abResult: boolean;
     answerQuality: string;
     speedPerception: string;
     rlfhResponse: string;
@@ -25,34 +17,22 @@ type QuestionnaireProps = {
 
 export function Questionnaire({
   originalResponse,
-  alternativeResponse,
   originalPrompt,
-  abConfig,
   voiceMode,
   onSubmit,
 }: QuestionnaireProps) {
-  const [abResponse, setAbResponse] = useState<string>("");
-  const [abResult, setAbResult] = useState<boolean | null>(null);
   const [answerQuality, setAnswerQuality] = useState("");
   const [speedPerception, setSpeedPerception] = useState("");
   const [rlfhResponse, setRlfhResponse] = useState(originalResponse);
   const [miscNotes, setMiscNotes] = useState("");
-  const [isGeneratingAB, setIsGeneratingAB] = useState(true);
-
-  // Set the alternative response that was passed in
-  useEffect(() => {
-    setAbResponse(alternativeResponse);
-    setIsGeneratingAB(false);
-  }, [alternativeResponse]);
 
   const handleSubmit = () => {
-    if (abResult === null || !answerQuality || !speedPerception) {
+    if (!answerQuality || !speedPerception) {
       alert("Please fill out all required fields.");
       return;
     }
 
     onSubmit({
-      abResult,
       answerQuality,
       speedPerception,
       rlfhResponse,
@@ -141,52 +121,6 @@ export function Questionnaire({
 
 
       <div className="space-y-6">
-        {/* A-B Testing Section */}
-        <div>
-          <h4 className="font-medium mb-3 text-foreground">Which response do you prefer?</h4>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <div 
-                className={`p-4 border-2 rounded-lg text-sm text-foreground cursor-pointer transition-all duration-200 hover:shadow-md ${
-                  abResult === true 
-                    ? 'bg-muted/30 shadow-md' 
-                    : 'bg-background border-border hover:border-blue-200'
-                }`}
-                onClick={() => setAbResult(true)}
-              >
-                {originalResponse}
-              </div>
-              <h5 className="text-sm font-medium mt-2 text-foreground text-center">Original</h5>
-
-            </div>
-            <div>
-              <div 
-                className={`p-4 border-2 rounded-lg text-sm text-foreground cursor-pointer transition-all duration-200 hover:shadow-md ${
-                  abResult === false 
-                    ? 'bg-muted/30 shadow-md' 
-                    : 'bg-background border-border hover:border-white'
-                } ${isGeneratingAB ? 'cursor-wait' : ''}`}
-                onClick={() => !isGeneratingAB && setAbResult(false)}
-              >
-                {isGeneratingAB ? (
-                  <div className="flex items-center">
-                    <div className="animate-spin mr-2">⏳</div>
-                    Generating alternative response...
-                  </div>
-                ) : (
-                  abResponse
-                )}
-              </div>
-              <h5 className="text-sm font-medium mt-2 text-foreground text-center">Alternative</h5>
-
-            </div>
-          </div>
-          
-        </div>
-        
-
-        {/* Divider */}
-        <hr className="border-t border-black-600 my-6" />
 
         {/* Response Editing */}
         <div>
@@ -224,7 +158,7 @@ export function Questionnaire({
         <div className="flex justify-center">
           <Button 
             onClick={handleSubmit}
-            disabled={abResult === null || !answerQuality || !speedPerception || isGeneratingAB}
+            disabled={!answerQuality || !speedPerception}
           >
             Submit Feedback
           </Button>
