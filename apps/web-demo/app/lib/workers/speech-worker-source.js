@@ -206,17 +206,7 @@ async function vad(buffer) {
 }
 
 const processThought = async (thought, userInput, thoughtResponsePairs, splitter) => {
-  const thoughtProcessingStartTime = Date.now();
-      self.postMessage({ 
-      type: "smollm_submit", 
-      thought,
-      timestamp: thoughtProcessingStartTime,
-      turnOffset: thoughtProcessingStartTime - conversationTurnStartTime,
-      turnStartTime: conversationTurnStartTime
-    });
-
   let contextPrompt = `<|im_start|>user\n${userInput}<|im_end|>\n`;
-  
   for (const pair of thoughtResponsePairs) {
     contextPrompt += `<|im_start|>knowledge\n${pair.thought}<|im_end|>\n<|im_start|>assistant\n${pair.response}<|im_end|>\n`;
   }
@@ -224,7 +214,16 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     contextPrompt += `<|im_start|>knowledge\n${thought}<|im_end|>\n`;
   }
 
-  console.log("DEBUG: SmolLM Prompt: ", contextPrompt);
+  const thoughtProcessingStartTime = Date.now();
+      self.postMessage({ 
+      type: "smollm_submit", 
+      thought,
+      prompt: contextPrompt,
+      timestamp: thoughtProcessingStartTime,
+      turnOffset: thoughtProcessingStartTime - conversationTurnStartTime,
+      turnStartTime: conversationTurnStartTime
+    });
+
   const inputs = tokenizer(contextPrompt);
   const outputs = await llm.generate({
     ...inputs,
@@ -234,11 +233,10 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     pad_token_id: tokenizer.pad_token_id,
     eos_token_id: tokenizer.eos_token_id,
   });
-  console.log("DEBUG: Output tokens:", [...outputs.data]);
   const newTokens = Array.from(outputs.data.slice(inputs.input_ids.data.length)).map(t => Number(t));
   const generatedText = tokenizer.decode(newTokens, { skip_special_tokens: true });
-  console.log("DEBUG: Generated text:", generatedText);
-
+  const rawResponse = tokenizer.decode(newTokens, { skip_special_tokens: false });
+  
   response = generatedText
     .replace(/<\|im_start\|>/g, "")
     .replace(/<\|im_end\|>/g, "")
@@ -268,6 +266,8 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
       type: "smollm_response", 
       thought,
       response,
+      rawResponse,
+      fullPrompt: contextPrompt,
       timestamp: thoughtProcessingEndTime,
       turnOffset: thoughtProcessingEndTime - conversationTurnStartTime,
       turnStartTime: conversationTurnStartTime,

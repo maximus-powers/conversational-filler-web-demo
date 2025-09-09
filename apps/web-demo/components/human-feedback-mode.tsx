@@ -4,15 +4,12 @@ import { useState } from "react";
 import { Button } from "@convo-filler/ui/components/button";
 import { Chat } from "./chat";
 import { EventData } from "../app/lib/event-tracker";
+import { saveConversation } from "../app/lib/utils/utils";
 
 type WorkflowState = "intro" | "chat" | "questionnaire" | "complete";
 
 function generateUUID(): string {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c == 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
+  return crypto.randomUUID();
 }
 
 type ModelConfig = {
@@ -116,35 +113,26 @@ export function HumanFeedbackMode({
   const handleQuestionnaireSubmit = async (data: any) => {
     if (!currentConversation) return;
 
-    const payload = {
-      conversationId: currentConversation.conversationId,
-      localModel: currentConversation.config.localModel,
-      thoughtModel: currentConversation.config.thoughtModel,
-      voiceMode: currentConversation.voiceMode,
-      prompts: currentConversation.prompts,
-      events: currentConversation.events,
-      ...data,
-    };
+    console.log('Submitting feedback payload:', data);
 
-    console.log('Submitting feedback payload:', payload);
-
-    // Save feedback data to database
     try {
-      const response = await fetch("/api/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-        console.error('API Error:', errorData);
-        throw new Error(`Failed to save feedback: ${errorData.error}`);
+      if (currentConversation.prompts.length > 0) {
+        const latestPrompt = currentConversation.prompts[currentConversation.prompts.length - 1];
+        
+        await saveConversation({
+          conversationId: currentConversation.conversationId,
+          localModel: currentConversation.config.localModel,
+          thoughtModel: currentConversation.config.thoughtModel,
+          voiceMode: currentConversation.voiceMode,
+          userPrompt: latestPrompt.prompt,
+          aiResponse: latestPrompt.generatedResponse,
+          eventData: currentConversation.events,
+          questionnaireData: data,
+          feedbackMode: true
+        });
       }
-      
-      const result = await response.json();
-      console.log('Feedback saved successfully:', result);
 
+      console.log('Feedback saved successfully');
       setWorkflowState("chat");
     } catch (error) {
       console.error("Error saving feedback:", error);

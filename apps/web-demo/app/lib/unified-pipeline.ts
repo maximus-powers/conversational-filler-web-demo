@@ -238,7 +238,10 @@ export class UnifiedPipeline {
     }
     
     if (this.eventTracker.hasActiveTurn()) {
-      this.eventTracker.addEvent("LocalLMResponse", { response: data.response || data.content });
+      this.eventTracker.addEvent("LocalLMResponse", { 
+        response: data.rawResponse || data.response || data.content,
+        prompt: data.fullPrompt 
+      });
       this.config.onEventData?.(this.eventTracker.getData());
     }
   }

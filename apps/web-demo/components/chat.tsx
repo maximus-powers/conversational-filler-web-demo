@@ -9,6 +9,7 @@ import { Timeline } from "./timeline";
 import { InferenceModeSwitcher } from "./inference-mode-switcher";
 import { StatsPanel } from "./stats-panel";
 import { EventData } from "../app/lib/event-tracker";
+import { saveConversation } from "../app/lib/utils/utils";
 
 interface Message {
   id: string;
@@ -47,7 +48,6 @@ export function Chat({
   const [modelLoadingProgress, setModelLoadingProgress] = useState<string>("");
   const [eventData, setEventData] = useState<EventData | null>(null);
   const [currentUserPrompt, setCurrentUserPrompt] = useState<string>("");
-  const [currentTurnResponse, setCurrentTurnResponse] = useState<string>("");
   const [responseCompleteTimeout, setResponseCompleteTimeout] = useState<NodeJS.Timeout | null>(null);
   const [currentAssistantMessageId, setCurrentAssistantMessageId] = useState<string | null>(null);
   const [conversationStartTime, setConversationStartTime] = useState<
@@ -65,11 +65,14 @@ export function Chat({
   const [selectedModel, setSelectedModel] = useState<"maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct" | "none">(
     (config?.localModel as any) || "maximuspowers/smollm-convo-filler-onnx-official"
   );
+  const [conversationId] = useState<string>(() => crypto.randomUUID());
   const [showTimeline, setShowTimeline] = useState(!feedbackMode);
   const [showStatsPanel, setShowStatsPanel] = useState(!feedbackMode);
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const currentUserPromptRef = useRef<string>("");
+  const eventDataRef = useRef<EventData | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -87,31 +90,43 @@ export function Chat({
     }
   };
 
-  const handleResponseComplete = (messageId: string, fullResponse: string) => {    
+
+  const handleResponseComplete = (_messageId: string, fullResponse: string, userPrompt?: string) => {    
+    const promptToUse = userPrompt || currentUserPrompt;
+    if (!feedbackMode && promptToUse) {
+      saveConversation({
+        conversationId,
+        localModel: selectedModel === "none" ? null : selectedModel,
+        thoughtModel: thoughtProvider,
+        voiceMode: mode === "voice",
+        userPrompt: promptToUse,
+        aiResponse: fullResponse,
+        eventData: eventDataRef.current || eventData,
+        feedbackMode
+      });
+    }
+    // wait until questionnaire is done in feedback mode
     if (feedbackMode && onTurnComplete) {
       const turnData = [{
-        prompt: currentUserPrompt || "User message",
-        thought: null, // TODO: extract actual thought data
+        prompt: promptToUse || "User message",
+        thought: null,
         generatedResponse: fullResponse,
       }];
       onTurnComplete(turnData, eventData || undefined);
     }
   };
 
-  const scheduleResponseComplete = (messageId: string) => {
+  const scheduleResponseComplete = (messageId: string, userPrompt?: string) => {
     if (responseCompleteTimeout) {
       clearTimeout(responseCompleteTimeout);
     }
-    
-    // 500ms after complete it triggers questionaire
     const timeout = setTimeout(() => {
       const message = messagesRef.current.get(messageId);
       if (message) {
         const fullResponse = message.processedContent || message.content;
-        handleResponseComplete(messageId, fullResponse || "");
+        handleResponseComplete(messageId, fullResponse || "", userPrompt);
       }
     }, 500);
-    
     setResponseCompleteTimeout(timeout);
   };
 
@@ -146,11 +161,9 @@ export function Chat({
             setIsLoading(false);
             const msgId = messageId || Date.now().toString();
             setCurrentAssistantMessageId(msgId);
-            if (feedbackMode) {
-              setTimeout(() => {
-                scheduleResponseComplete(msgId);
-              }, 3000); // 3 seconds as fallback
-            }
+            setTimeout(() => {
+              scheduleResponseComplete(msgId, currentUserPromptRef.current); // not sure if this is even working
+            }, 3000); // 3 seconds as fallback
           }
         },
 
@@ -169,8 +182,8 @@ export function Chat({
               return msg;
             }),
           );
-          if (feedbackMode && messageId === currentAssistantMessageId) {
-            scheduleResponseComplete(messageId);
+          if (messageId === currentAssistantMessageId) {
+            scheduleResponseComplete(messageId, currentUserPromptRef.current);
           }
         },
 
@@ -185,11 +198,11 @@ export function Chat({
           } else if (status === "recording_end") {
             setIsListening(false);
           } else if (status === "response_complete" || status === "processing_complete" || status === "generation_complete") {
-            if (feedbackMode && currentAssistantMessageId) {
+            if (currentAssistantMessageId) {
               const message = messagesRef.current.get(currentAssistantMessageId);
               if (message) {
                 const fullResponse = message.processedContent || message.content;
-                handleResponseComplete(currentAssistantMessageId, fullResponse);
+                handleResponseComplete(currentAssistantMessageId, fullResponse, currentUserPromptRef.current);
               }
             }
           }
@@ -197,6 +210,7 @@ export function Chat({
 
         onEventData: (data: EventData) => {
           setEventData(data);
+          eventDataRef.current = data;
         },
       });
 
@@ -253,9 +267,8 @@ export function Chat({
     setInput("");
     setIsLoading(true);
     
-    if (feedbackMode) {
-      setCurrentUserPrompt(currentInput);
-    }
+    setCurrentUserPrompt(currentInput);
+    currentUserPromptRef.current = currentInput;
 
     // clear timeline
     if (messages.length === 0) {
@@ -289,10 +302,8 @@ export function Chat({
           
           setIsLoading(false);
           
-          if (feedbackMode) {
-            setCurrentAssistantMessageId(aiMessageId);
-            scheduleResponseComplete(aiMessageId);
-          }
+          setCurrentAssistantMessageId(aiMessageId);
+          scheduleResponseComplete(aiMessageId, currentUserPromptRef.current);
         }, 1000);
         return;
       }

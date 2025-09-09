@@ -55,7 +55,7 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
     }
   });
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/index.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/index.js
   var esm_exports = {};
   __export(esm_exports, {
     InferenceSession: () => InferenceSession2,
@@ -67,7 +67,7 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
     registerBackend: () => registerBackend
   });
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/backend-impl.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/backend-impl.js
   var backends = /* @__PURE__ */ new Map();
   var backendsSortedByPriority = [];
   var registerBackend = (name, backend, priority) => {
@@ -170,10 +170,10 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
     ];
   };
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/version.js
-  var version = "1.21.0";
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/version.js
+  var version = "1.22.0";
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/env-impl.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/env-impl.js
   var logLevelValue = "warning";
   var env = {
     wasm: {},
@@ -195,10 +195,10 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
   };
   Object.defineProperty(env, "logLevel", { enumerable: true });
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/env.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/env.js
   var env2 = env;
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/tensor-conversion-impl.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/tensor-conversion-impl.js
   var tensorToDataURL = (tensor, options) => {
     const canvas = typeof document !== "undefined" ? document.createElement("canvas") : new OffscreenCanvas(1, 1);
     canvas.width = tensor.dims[3];
@@ -357,7 +357,7 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
     return image;
   };
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/tensor-factory-impl.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/tensor-factory-impl.js
   var bufferToTensor = (buffer, options) => {
     if (buffer === void 0) {
       throw new Error("Image buffer must be defined");
@@ -566,7 +566,7 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
   };
   var tensorFromPinnedBuffer = (type, buffer, dims) => new Tensor({ location: "cpu-pinned", type, data: buffer, dims: dims ?? [buffer.length] });
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/tensor-impl-type-mapping.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/tensor-impl-type-mapping.js
   var NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP = /* @__PURE__ */ new Map([
     ["float32", Float32Array],
     ["uint8", Uint8Array],
@@ -615,7 +615,7 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
     }
   };
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/tensor-utils-impl.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/tensor-utils-impl.js
   var calculateSize = (dims) => {
     let size = 1;
     for (let i3 = 0; i3 < dims.length; i3++) {
@@ -667,7 +667,7 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
     }
   };
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/tensor-impl.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/tensor-impl.js
   var Tensor = class {
     /**
      * implementation.
@@ -934,10 +934,10 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
     }
   };
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/tensor.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/tensor.js
   var Tensor2 = Tensor;
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/trace.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/trace.js
   var TRACE = (deviceType, label) => {
     if (typeof env.trace === "undefined" ? !env.wasm.trace : !env.trace) {
       return;
@@ -974,7 +974,7 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
     TRACE_FUNC("END", extraMsg);
   };
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/inference-session-impl.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/inference-session-impl.js
   var InferenceSession = class _InferenceSession {
     constructor(handler) {
       this.handler = handler;
@@ -1140,9 +1140,15 @@ if (typeof globalThis.importMetaUrl === 'undefined') {
     get outputNames() {
       return this.handler.outputNames;
     }
+    get inputMetadata() {
+      return this.handler.inputMetadata;
+    }
+    get outputMetadata() {
+      return this.handler.outputMetadata;
+    }
   };
 
-  // ../../node_modules/.pnpm/onnxruntime-common@1.21.0/node_modules/onnxruntime-common/dist/esm/inference-session.js
+  // ../../node_modules/.pnpm/onnxruntime-common@1.22.0/node_modules/onnxruntime-common/dist/esm/inference-session.js
   var InferenceSession2 = InferenceSession;
 
   // ../../node_modules/.pnpm/onnxruntime-web@1.22.0-dev.20250409-89f8206ba4/node_modules/onnxruntime-web/dist/ort.bundle.min.mjs
@@ -65373,14 +65379,6 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
       return isSpeech > SPEECH_THRESHOLD || isRecording && isSpeech >= EXIT_THRESHOLD;
     }
     const processThought = async (thought, userInput, thoughtResponsePairs, splitter) => {
-      const thoughtProcessingStartTime = Date.now();
-      self.postMessage({
-        type: "smollm_submit",
-        thought,
-        timestamp: thoughtProcessingStartTime,
-        turnOffset: thoughtProcessingStartTime - conversationTurnStartTime,
-        turnStartTime: conversationTurnStartTime
-      });
       let contextPrompt = `<|im_start|>user
 ${userInput}<|im_end|>
 `;
@@ -65396,7 +65394,15 @@ ${pair.response}<|im_end|>
 ${thought}<|im_end|>
 `;
       }
-      console.log("DEBUG: SmolLM Prompt: ", contextPrompt);
+      const thoughtProcessingStartTime = Date.now();
+      self.postMessage({
+        type: "smollm_submit",
+        thought,
+        prompt: contextPrompt,
+        timestamp: thoughtProcessingStartTime,
+        turnOffset: thoughtProcessingStartTime - conversationTurnStartTime,
+        turnStartTime: conversationTurnStartTime
+      });
       const inputs = tokenizer(contextPrompt);
       const outputs = await llm.generate({
         ...inputs,
@@ -65406,10 +65412,9 @@ ${thought}<|im_end|>
         pad_token_id: tokenizer.pad_token_id,
         eos_token_id: tokenizer.eos_token_id
       });
-      console.log("DEBUG: Output tokens:", [...outputs.data]);
       const newTokens = Array.from(outputs.data.slice(inputs.input_ids.data.length)).map((t2) => Number(t2));
       const generatedText = tokenizer.decode(newTokens, { skip_special_tokens: true });
-      console.log("DEBUG: Generated text:", generatedText);
+      const rawResponse = tokenizer.decode(newTokens, { skip_special_tokens: false });
       response = generatedText.replace(/<\|im_start\|>/g, "").replace(/<\|im_end\|>/g, "").replace(/^assistant\s*/i, "").trim().split("\n")[0];
       if (response) {
         if (thought === "<|sil|>" && !firstResponseTime && conversationStartTime) {
@@ -65431,6 +65436,8 @@ ${thought}<|im_end|>
           type: "smollm_response",
           thought,
           response,
+          rawResponse,
+          fullPrompt: contextPrompt,
           timestamp: thoughtProcessingEndTime,
           turnOffset: thoughtProcessingEndTime - conversationTurnStartTime,
           turnStartTime: conversationTurnStartTime,

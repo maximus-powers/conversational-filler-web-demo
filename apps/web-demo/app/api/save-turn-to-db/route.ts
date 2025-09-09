@@ -22,10 +22,7 @@ export async function POST(request: NextRequest) {
       !conversationId ||
       thoughtModel === undefined ||
       voiceMode === undefined ||
-      !prompts ||
-      !answerQuality ||
-      !speedPerception ||
-      !rlfhResponse
+      !prompts
     ) {
       return NextResponse.json(
         { error: 'Missing required fields' },
@@ -48,9 +45,9 @@ export async function POST(request: NextRequest) {
       voiceMode,
       prompts,
       events,
-      answerQuality,
-      speedPerception,
-      rlfhResponse,
+      answerQuality: answerQuality || null,
+      speedPerception: speedPerception || null,
+      rlfhResponse: rlfhResponse || null,
       miscNotes,
     }).returning();
 
