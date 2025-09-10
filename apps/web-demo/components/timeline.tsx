@@ -13,6 +13,8 @@ import {
   Mic,
   MicOff,
   User,
+  Play,
+  Square,
 } from "lucide-react";
 import { EventData, TimelineEvent, EventName } from "../app/lib/event-tracker";
 
@@ -47,8 +49,10 @@ export function Timeline({
       case "ThoughtApiFirstToken": return "First thought token";
       case "LocalLMSubmit": return "Processing with model";
       case "LocalLMResponse": return "Model response";
-      case "TTSStart": return "Starting speech";
-      case "TTSEnd": return "Speech complete";
+      case "TTSStart": return "Synthesizing speech";
+      case "TTSEnd": return "Synthesis complete";
+      case "AudioPlaybackStart": return "Audio playback started";
+      case "AudioPlaybackEnd": return "Audio playback ended";
       case "ThoughtParsed": return "Thought received";
       default: return eventName;
     }
@@ -106,7 +110,11 @@ export function Timeline({
         return <Bot className="h-3 w-3 text-blue-500" />;
       case "TTSStart":
       case "TTSEnd":
-        return <Volume2 className="h-3 w-3 text-orange-500" />;
+        return <Volume2 className="h-3 w-3 text-orange-300" />;
+      case "AudioPlaybackStart":
+        return <Play className="h-3 w-3 text-orange-600" />;
+      case "AudioPlaybackEnd":
+        return <Square className="h-3 w-3 text-orange-600" />;
       default:
         return <Clock className="h-3 w-3 text-gray-500" />;
     }
@@ -132,7 +140,10 @@ export function Timeline({
         return "border-blue-500 bg-blue-50 dark:bg-blue-950";
       case "TTSStart":
       case "TTSEnd":
-        return "border-orange-500 bg-orange-50 dark:bg-orange-950";
+        return "border-orange-300 bg-orange-50 dark:bg-orange-950";
+      case "AudioPlaybackStart":
+      case "AudioPlaybackEnd":
+        return "border-orange-600 bg-orange-100 dark:bg-orange-900";
       default:
         return "border-gray-500 bg-gray-50 dark:bg-gray-950";
     }

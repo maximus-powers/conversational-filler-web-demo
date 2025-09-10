@@ -38,6 +38,7 @@ export class UnifiedPipeline {
   private state: UnifiedPipelineState;
   private isWorkerReady = false;
   private eventTracker = new EventTracker();
+  private hasStartedPlayback = false;
 
   constructor(config: UnifiedPipelineConfig) {
     this.config = config;
@@ -181,6 +182,12 @@ export class UnifiedPipeline {
     if (this.state.mode !== "voice" || !data.result) return;
     const audioBuffer = data.result; // { type: 'output', text: string, result: Float32Array }
     if (this.playbackNode) {
+      if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
+        this.hasStartedPlayback = true;
+        this.eventTracker.addEvent("AudioPlaybackStart");
+        this.config.onEventData?.(this.eventTracker.getData());
+      }
+      
       this.state.isPlaying = true;
       this.playbackNode.port.postMessage(audioBuffer);
     }
@@ -203,6 +210,7 @@ export class UnifiedPipeline {
 
   private handleConversationTurnStart(data: any) {
     this.state.currentMessageId = null;
+    this.hasStartedPlayback = false;
     this.startNewTurn();
   }
 
@@ -296,6 +304,13 @@ export class UnifiedPipeline {
     this.playbackNode.port.onmessage = (event) => {
       if (event.data.type === "playback_ended") {
         this.state.isPlaying = false;
+        this.hasStartedPlayback = false; 
+        
+        if (this.eventTracker.hasActiveTurn()) {
+          this.eventTracker.addEvent("AudioPlaybackEnd");
+          this.config.onEventData?.(this.eventTracker.getData());
+        }
+        
         if (this.worker) {
           this.worker.postMessage({ type: "playback_ended" });
         }

@@ -14,7 +14,7 @@ export interface ConversationMetrics {
 }
 
 export interface ProcessSegment {
-  type: 'stt' | 'smollm' | 'tts';
+  type: 'stt' | 'smollm' | 'tts' | 'audio_playback';
   startTime: number;
   endTime: number;
   duration: number;
@@ -35,7 +35,9 @@ const getProcessColor = (type: ProcessSegment['type']) => {
     case 'smollm':
       return 'bg-blue-500';
     case 'tts':
-      return 'bg-orange-500';
+      return 'bg-orange-300'; // Lighter orange for synthesis
+    case 'audio_playback':
+      return 'bg-orange-600'; // Darker orange for actual playback
     default:
       return 'bg-gray-500';
   }
@@ -109,7 +111,7 @@ export function StatsPanel({
       }
     });
     
-    // TTS segments
+    // TTS synthesis segments (keep for debugging)
     const ttsStarts = allEvents.filter(e => e.eventName === "TTSStart");
     const ttsEnds = allEvents.filter(e => e.eventName === "TTSEnd");
     ttsStarts.forEach((start) => {
@@ -120,11 +122,31 @@ export function StatsPanel({
           startTime: start.timestamp,
           endTime: end.timestamp,
           duration: end.timestamp - start.timestamp,
-          label: 'Text-to-Speech'
+          label: 'TTS Synthesis'
         });
         const endIndex = ttsEnds.indexOf(end);
         if (endIndex > -1) {
           ttsEnds.splice(endIndex, 1);
+        }
+      }
+    });
+    
+    // audio playing segment
+    const playbackStarts = allEvents.filter(e => e.eventName === "AudioPlaybackStart");
+    const playbackEnds = allEvents.filter(e => e.eventName === "AudioPlaybackEnd");
+    playbackStarts.forEach((start) => {
+      const end = playbackEnds.find(endEvent => endEvent.timestamp > start.timestamp);
+      if (end) {
+        processTimeline.push({
+          type: 'audio_playback',
+          startTime: start.timestamp,
+          endTime: end.timestamp,
+          duration: end.timestamp - start.timestamp,
+          label: 'Audio Playback'
+        });
+        const endIndex = playbackEnds.indexOf(end);
+        if (endIndex > -1) {
+          playbackEnds.splice(endIndex, 1);
         }
       }
     });
@@ -315,6 +337,11 @@ export function StatsPanel({
               } else if (segment.type === 'tts') {
                 relevantEvent = waterfallEvents.find((e) => 
                   (e.eventName === 'TTSStart' || e.eventName === 'TTSEnd') && 
+                  e.timestamp >= segment.startTime && e.timestamp <= segment.endTime
+                );
+              } else if (segment.type === 'audio_playback') {
+                relevantEvent = waterfallEvents.find((e) => 
+                  (e.eventName === 'AudioPlaybackStart' || e.eventName === 'AudioPlaybackEnd') && 
                   e.timestamp >= segment.startTime && e.timestamp <= segment.endTime
                 );
               }

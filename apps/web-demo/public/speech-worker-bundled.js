@@ -65430,7 +65430,6 @@ ${thought}<|im_end|>
         }
         if (splitter) {
           const textToAdd = thought === "" ? response : " " + response;
-          console.log(`[TTS DEBUG] Adding to splitter: "${textToAdd}" (thought: "${thought}")`);
           splitter.push(textToAdd);
         }
         const thoughtProcessingEndTime = Date.now();
@@ -65752,15 +65751,11 @@ ${thought}<|im_end|>
         messages[messages.length - 1].content = fullResponse;
       }
       if (splitter) {
-        console.log(`[TTS DEBUG] About to close splitter. Queue length: ${thoughtQueue.length}, isProcessingThought: ${isProcessingThought}`);
         await new Promise((resolve) => setTimeout(resolve, 50));
         splitter.close();
-        console.log(`[TTS DEBUG] Splitter closed`);
       }
       if (ttsStreamPromise) {
-        console.log(`[TTS DEBUG] Waiting for TTS stream to complete...`);
         await ttsStreamPromise;
-        console.log(`[TTS DEBUG] TTS stream completed`);
       }
       isPlaying = false;
     };

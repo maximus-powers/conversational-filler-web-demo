@@ -10,6 +10,8 @@ export type EventName =
   | "LocalLMResponse"
   | "TTSStart"
   | "TTSEnd"
+  | "AudioPlaybackStart"
+  | "AudioPlaybackEnd"
   | "ThoughtParsed";
 
 export interface TimelineEvent {
