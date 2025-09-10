@@ -258,7 +258,8 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
     }
 
     if (splitter) { // add to TTS if available
-      splitter.push(thought === "" ? response : " " + response);
+      const textToAdd = thought === "" ? response : " " + response;
+      splitter.push(textToAdd);
     }
     
     const thoughtProcessingEndTime = Date.now();
@@ -310,6 +311,12 @@ const processThoughtQueue = async (userInput, thoughtResponsePairs, splitter) =>
   
   if (!isGeneratingSilence && !streamComplete) {
     startSilenceTimer(userInput, thoughtResponsePairs, splitter);
+  }
+};
+
+const waitForThoughtQueueComplete = async () => {
+  while (thoughtQueue.length > 0 || isProcessingThought) {
+    await new Promise(resolve => setTimeout(resolve, 10)); 
   }
 };
 
@@ -389,12 +396,13 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   messages.push({ role: "user", content: userText });
 
   let splitter = null;
+  let ttsStreamPromise = null;
   if (enableTTS && tts) {
     splitter = new TextSplitterStream();
     const streamOptions = voice ? { voice } : {};
     const stream = tts.stream(splitter, streamOptions);
     
-    (async () => {
+    ttsStreamPromise = (async () => {
       let chunkCount = 0;
       ttsStartTime = Date.now();
       self.postMessage({ 
@@ -448,6 +456,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   
   let thoughtsPromise = null;
   let thoughtStartTime = null;
+  let immediateResponse = null;
   
   try {
     clearSilenceTimer();
@@ -511,7 +520,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
       });
     }
     
-    const immediateResponse = await processThought("<|sil|>", userText, [], splitter);
+    immediateResponse = await processThought("<|sil|>", userText, [], splitter);
     if (immediateResponse) {
       thoughtResponsePairs.push({ thought: "<|sil|>", response: immediateResponse });
       messages.push({ role: "assistant", content: immediateResponse });
@@ -595,6 +604,7 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
             }
 
             await processThoughtQueue(userText, thoughtResponsePairs, splitter);
+            await waitForThoughtQueueComplete();
           }
         }
         
@@ -608,10 +618,13 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
     } else if (thoughtsPromise && thoughtProvider === 'none') {
       await thoughtsPromise;
       await processThoughtQueue(userText, thoughtResponsePairs, splitter);
+      await waitForThoughtQueueComplete();
     }
   } catch (error) {
     console.warn("Failed to generate thoughts:", error);
   }
+  
+  await waitForThoughtQueueComplete();
   
   const fullResponse = thoughtResponsePairs.map(pair => pair.response).join(" ");
   if (fullResponse !== immediateResponse) {
@@ -619,7 +632,12 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   }
   
   if (splitter) {
+    await new Promise(resolve => setTimeout(resolve, 50));
     splitter.close();
+  }
+  
+  if (ttsStreamPromise) {
+    await ttsStreamPromise;
   }
   
   isPlaying = false;
