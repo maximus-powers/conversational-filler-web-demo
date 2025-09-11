@@ -28,17 +28,14 @@ export const saveConversation = async ({
 }) => {
   try {
     // extract the full prompts from the events
-    if (!eventData?.turns) {
-      return [];
-    }
-    const fullPrompts = eventData.turns.flatMap(turn =>
+    const fullPrompts = eventData?.turns ? eventData.turns.flatMap(turn =>
       turn.timeline
       .filter(e => e.eventName === "LocalLMResponse" && e.prompt && e.response)
       .map(responseEvent => ({
         fullPrompt: responseEvent.prompt,
         assistantResponse: responseEvent.response,
       }))
-    );
+    ) : [];
 
     const payload = {
       conversationId,
