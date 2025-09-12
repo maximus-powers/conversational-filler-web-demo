@@ -122,7 +122,7 @@ export function Timeline({
         return <Bot className="h-3 w-3 text-blue-500" />;
       case "TTSSynthesisStart":
       case "TTSSynthesisEnd":
-        return <Volume2 className="h-3 w-3 text-yellow-500" />;
+        return <Volume2 className="h-3 w-3 text-emerald-500" />;
       case "AudioPlaybackStart":
         return <Play className="h-3 w-3 text-orange-600" />;
       case "AudioPlaybackEnd":
@@ -152,7 +152,7 @@ export function Timeline({
         return "border-blue-500 bg-blue-50 dark:bg-blue-950";
       case "TTSSynthesisStart":
       case "TTSSynthesisEnd":
-        return "border-yellow-500 bg-yellow-50 dark:bg-yellow-950";
+        return "border-emerald-500 bg-emerald-50 dark:bg-emerald-950";
       case "AudioPlaybackStart":
       case "AudioPlaybackEnd":
         return "border-orange-600 bg-orange-100 dark:bg-orange-900";

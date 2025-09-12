@@ -212,6 +212,10 @@ export function Chat({
           setEventData(data);
           eventDataRef.current = data;
         },
+
+        onConversationStart: (startTime: number) => {
+          setConversationStartTime(startTime);
+        },
       });
 
       try {
@@ -270,10 +274,6 @@ export function Chat({
     setCurrentUserPrompt(currentInput);
     currentUserPromptRef.current = currentInput;
 
-    // clear timeline
-    if (messages.length === 0) {
-      setConversationStartTime(Date.now());
-    }
 
     try {
       if (pipelineRef.current) {

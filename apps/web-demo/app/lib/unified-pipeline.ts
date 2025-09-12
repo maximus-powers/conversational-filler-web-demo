@@ -14,6 +14,7 @@ export interface UnifiedPipelineConfig {
   onTranscriptionReceived?: (text: string) => void;
   onStatusChange?: (status: string, message: string) => void;
   onEventData?: (eventData: any) => void;
+  onConversationStart?: (startTime: number) => void;
 }
 
 export interface UnifiedPipelineState {
@@ -212,6 +213,10 @@ export class UnifiedPipeline {
     this.state.currentMessageId = null;
     this.hasStartedPlayback = false;
     this.startNewTurn();
+    
+    if (data.timestamp && this.config.onConversationStart) {
+      this.config.onConversationStart(data.timestamp);
+    }
   }
 
   private handleSmolLMSubmit(data: any) {

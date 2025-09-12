@@ -3,7 +3,7 @@
 import React from "react";
 import { Clock, Zap, TrendingDown } from "lucide-react";
 import { Tooltip } from "./tooltip";
-import { EventData, EventName } from "../app/lib/event-tracker";
+import { EventData } from "../app/lib/event-tracker";
 
 export interface ConversationMetrics {
   timeToFirstResponse: number;
@@ -37,9 +37,9 @@ const getProcessColor = (type: ProcessSegment['type']) => {
     case 'smollm':
       return 'bg-blue-500';
     case 'tts_synthesis':
-      return 'bg-yellow-500'; // Yellow for individual synthesis
+      return 'bg-emerald-500';
     case 'audio_playback':
-      return 'bg-orange-600'; // Darker orange for actual playback
+      return 'bg-orange-600';
     default:
       return 'bg-gray-500';
   }
@@ -195,9 +195,27 @@ export function StatsPanel({
     };
   }, [eventData, conversationStartTime]);
   
-  if (!metrics || !conversationStartTime) {
-    return null;
+  if (!conversationStartTime || !metrics) {
+    return (
+      <div className="bg-card border-b px-6 py-4">
+        <div className="flex items-center justify-center text-muted-foreground text-sm">
+          No conversation data yet
+        </div>
+      </div>
+    );
   }
+
+  // if (!metrics) {
+  //   return (
+  //     <div className="bg-card border-b px-6 py-4">
+  //       <div className="flex items-center gap-8 mb-4">
+  //         <div className="flex items-center gap-2">
+  //           <span className="text-sm font-medium">Waiting for response data...</span>
+  //         </div>
+  //       </div>
+  //     </div>
+  //   );
+  // }
 
   // timeline scale - use last turn's timeframe instead of full conversation
   const lastTurn = eventData?.turns[eventData.turns.length - 1];
@@ -337,7 +355,7 @@ export function StatsPanel({
                 relevantEvent = waterfallEvents.find((e) => 
                   (e.eventName === 'STTEnd') && Math.abs(e.timestamp - segment.endTime) < 50
                 );
-              } else if (segment.type === 'tts_synthesis') {
+              } else if (segment.type === 'tts_synthesis' && 'responseIndex' in segment) {
                 relevantEvent = waterfallEvents.find((e) => 
                   (e.eventName === 'TTSSynthesisStart' || e.eventName === 'TTSSynthesisEnd') && 
                   e.timestamp >= segment.startTime && e.timestamp <= segment.endTime &&
@@ -375,8 +393,8 @@ export function StatsPanel({
                 tooltipContent += `\nResponse: ${responseEvent.response}`;
               }
             } else if (segment.category === 'process' && segment.type === 'tts_synthesis') {
-              if (segment.synthesisId) {
-                tooltipContent += `\nSynthesis ID: ${segment.synthesisId}`;
+              if ('synthesisId' in segment && segment.synthesisId) {
+                tooltipContent += `\nSynthesis ID: ${segment.synthesisId!}`;
               }
               if (relevantEvent?.text) {
                 tooltipContent += `\nText: "${relevantEvent.text}"`;
