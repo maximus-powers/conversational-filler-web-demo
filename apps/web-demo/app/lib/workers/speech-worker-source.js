@@ -40,7 +40,7 @@ try {
   const ttsDevice = hasWebGPU ? "webgpu" : "wasm"; // fallback to wasm if webgpu doens't work
   
   tts = await KokoroTTS.from_pretrained(model_id, {
-    dtype: "fp32",
+    dtype: "fp16",
     device: ttsDevice,
   });
   console.log('TTS initialized successfully');  

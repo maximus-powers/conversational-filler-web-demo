@@ -65241,7 +65241,7 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
       const hasWebGPU = typeof navigator !== "undefined" && "gpu" in navigator;
       const ttsDevice = hasWebGPU ? "webgpu" : "wasm";
       tts = await M3.from_pretrained(model_id, {
-        dtype: "fp32",
+        dtype: "fp16",
         device: ttsDevice
       });
       console.log("TTS initialized successfully");
