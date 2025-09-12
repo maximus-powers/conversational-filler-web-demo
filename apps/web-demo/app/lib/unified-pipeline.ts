@@ -128,11 +128,11 @@ export class UnifiedPipeline {
         case "smollm_response":
           this.handleSmolLMResponse(data);
           break;
-        case "tts_start":
-          this.handleTTSStart();
+        case "tts_synthesis_start":
+          this.handleTTSSynthesisStart(data);
           break;
-        case "tts_end":
-          this.handleTTSEnd();
+        case "tts_synthesis_end":
+          this.handleTTSSynthesisEnd(data);
           break;
         case "thought_submit":
           this.handleThoughtSubmit();
@@ -254,16 +254,30 @@ export class UnifiedPipeline {
     }
   }
 
-  private handleTTSStart() {
+
+  private handleTTSSynthesisStart(data: any) {
     if (this.eventTracker.hasActiveTurn()) {
-      this.eventTracker.addEvent("TTSStart");
+      this.eventTracker.addEvent("TTSSynthesisStart", {
+        text: data.text,
+        responseIndex: data.responseIndex,
+        synthesisId: data.synthesisId
+      });
       this.config.onEventData?.(this.eventTracker.getData());
     }
+    
+    console.log(`🔊 TTS Synthesis Start: "${data.text}" (Response #${data.responseIndex}, ID: ${data.synthesisId})`, {
+      timestamp: new Date(data.timestamp).toISOString(),
+      turnOffset: data.turnOffset
+    });
   }
 
-  private handleTTSEnd() {
+  private handleTTSSynthesisEnd(data: any) {
     if (this.eventTracker.hasActiveTurn()) {
-      this.eventTracker.addEvent("TTSEnd");
+      this.eventTracker.addEvent("TTSSynthesisEnd", {
+        text: data.text,
+        responseIndex: data.responseIndex,
+        synthesisId: data.synthesisId
+      });
       this.config.onEventData?.(this.eventTracker.getData());
     }
   }

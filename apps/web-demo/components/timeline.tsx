@@ -49,8 +49,8 @@ export function Timeline({
       case "ThoughtApiFirstToken": return "First thought token";
       case "LocalLMSubmit": return "Processing with model";
       case "LocalLMResponse": return "Model response";
-      case "TTSStart": return "Synthesizing speech";
-      case "TTSEnd": return "Synthesis complete";
+      case "TTSSynthesisStart": return "Synthesizing text chunk";
+      case "TTSSynthesisEnd": return "Text chunk synthesized";
       case "AudioPlaybackStart": return "Audio playback started";
       case "AudioPlaybackEnd": return "Audio playback ended";
       case "ThoughtParsed": return "Thought received";
@@ -61,19 +61,31 @@ export function Timeline({
   const events: TimelineDisplayEvent[] = React.useMemo(() => {
     if (!eventData?.turns?.length) return [];
     
-    // Only show events from the last turn (matching stats panel behavior)
     const lastTurn = eventData.turns[eventData.turns.length - 1];
     const turnEvents: TimelineDisplayEvent[] = [];
     
     lastTurn.timeline.forEach((event, eventIndex) => {
       const timestamp = new Date(event.timestamp).getTime();
+      
+      let message = getEventMessage(event.eventName, event);
+      let content = event.text || event.prompt || event.response || "";
+      
+      if (event.eventName === "TTSSynthesisStart" || event.eventName === "TTSSynthesisEnd") {
+        if (typeof event.responseIndex === 'number') {
+          message = `${message} (Response #${event.responseIndex})`;
+        }
+        if (event.synthesisId) {
+          message = `${message} [${event.synthesisId}]`;
+        }
+      }
+      
       turnEvents.push({
         id: `${eventData.turns.length - 1}-${eventIndex}`,
         timestamp,
         type: event.eventName,
-        message: getEventMessage(event.eventName, event),
-        content: event.text || event.prompt || event.response || "",
-        fullContent: event.text || event.prompt || event.response || ""
+        message,
+        content,
+        fullContent: content
       });
     });
     
@@ -108,9 +120,9 @@ export function Timeline({
       case "LocalLMSubmit":
       case "LocalLMResponse":
         return <Bot className="h-3 w-3 text-blue-500" />;
-      case "TTSStart":
-      case "TTSEnd":
-        return <Volume2 className="h-3 w-3 text-orange-300" />;
+      case "TTSSynthesisStart":
+      case "TTSSynthesisEnd":
+        return <Volume2 className="h-3 w-3 text-yellow-500" />;
       case "AudioPlaybackStart":
         return <Play className="h-3 w-3 text-orange-600" />;
       case "AudioPlaybackEnd":
@@ -138,9 +150,9 @@ export function Timeline({
       case "LocalLMSubmit":
       case "LocalLMResponse":
         return "border-blue-500 bg-blue-50 dark:bg-blue-950";
-      case "TTSStart":
-      case "TTSEnd":
-        return "border-orange-300 bg-orange-50 dark:bg-orange-950";
+      case "TTSSynthesisStart":
+      case "TTSSynthesisEnd":
+        return "border-yellow-500 bg-yellow-50 dark:bg-yellow-950";
       case "AudioPlaybackStart":
       case "AudioPlaybackEnd":
         return "border-orange-600 bg-orange-100 dark:bg-orange-900";

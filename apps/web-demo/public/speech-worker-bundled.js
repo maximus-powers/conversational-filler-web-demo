@@ -65362,6 +65362,9 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
     let isProcessingThought = false;
     let thoughtQueue = [];
     let streamComplete = false;
+    let responseIndex = 0;
+    let ttsSynthesisId = 0;
+    let pendingSynthesisEvents = /* @__PURE__ */ new Map();
     let conversationStartTime = null;
     let conversationTurnStartTime = null;
     let inferenceStartTime = null;
@@ -65369,8 +65372,6 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
     let firstThoughtTime = null;
     let sttStartTime = null;
     let sttEndTime = null;
-    let ttsStartTime = null;
-    let ttsEndTime = null;
     async function vad(buffer) {
       const input = new __webpack_exports__Tensor("float32", buffer, [1, buffer.length]);
       const { stateN, output } = await silero_vad({ input, sr, state });
@@ -65430,8 +65431,25 @@ ${thought}<|im_end|>
         }
         if (splitter) {
           const textToAdd = thought === "" ? response : " " + response;
+          const currentSynthesisId = `synthesis_${++ttsSynthesisId}`;
+          const synthesisStartTime = Date.now();
+          self.postMessage({
+            type: "tts_synthesis_start",
+            text: textToAdd.trim(),
+            responseIndex,
+            synthesisId: currentSynthesisId,
+            timestamp: synthesisStartTime,
+            turnOffset: synthesisStartTime - conversationTurnStartTime
+          });
+          pendingSynthesisEvents.set(textToAdd.trim(), {
+            synthesisId: currentSynthesisId,
+            responseIndex,
+            startTime: synthesisStartTime,
+            text: textToAdd.trim()
+          });
           splitter.push(textToAdd);
         }
+        responseIndex++;
         const thoughtProcessingEndTime = Date.now();
         self.postMessage({
           type: "smollm_response",
@@ -65506,6 +65524,9 @@ ${thought}<|im_end|>
       thoughtQueue = [];
       isProcessingThought = false;
       streamComplete = false;
+      responseIndex = 0;
+      ttsSynthesisId = 0;
+      pendingSynthesisEvents.clear();
       conversationStartTime = Date.now();
       conversationTurnStartTime = conversationStartTime;
       inferenceStartTime = null;
@@ -65513,8 +65534,6 @@ ${thought}<|im_end|>
       firstThoughtTime = null;
       sttStartTime = null;
       sttEndTime = null;
-      ttsStartTime = null;
-      ttsEndTime = null;
       self.postMessage({
         type: "conversation_turn_start",
         timestamp: conversationStartTime,
@@ -65554,20 +65573,27 @@ ${thought}<|im_end|>
         const stream = tts.stream(splitter, streamOptions);
         ttsStreamPromise = (async () => {
           let chunkCount = 0;
-          ttsStartTime = Date.now();
-          self.postMessage({
-            type: "tts_start",
-            text: "Starting TTS",
-            timestamp: ttsStartTime,
-            turnOffset: ttsStartTime - conversationTurnStartTime,
-            turnStartTime: conversationTurnStartTime
-          });
           try {
             for await (const chunk of stream) {
               chunkCount++;
               console.log(`TTS chunk ${chunkCount}:`, chunk);
               let audioData;
               const text = chunk.text || chunk.content || "";
+              const chunkEndTime = Date.now();
+              const pendingEvent = pendingSynthesisEvents.get(text);
+              if (pendingEvent) {
+                self.postMessage({
+                  type: "tts_synthesis_end",
+                  text,
+                  responseIndex: pendingEvent.responseIndex,
+                  synthesisId: pendingEvent.synthesisId,
+                  timestamp: chunkEndTime,
+                  turnOffset: chunkEndTime - conversationTurnStartTime,
+                  duration: chunkEndTime - pendingEvent.startTime,
+                  startTime: pendingEvent.startTime
+                });
+                pendingSynthesisEvents.delete(text);
+              }
               if (chunk.audio) {
                 if (chunk.audio.audio && chunk.audio.audio instanceof Float32Array) {
                   audioData = chunk.audio.audio;
@@ -65582,16 +65608,6 @@ ${thought}<|im_end|>
           } catch (error) {
             console.error("Error in TTS stream:", error);
           }
-          ttsEndTime = Date.now();
-          self.postMessage({
-            type: "tts_end",
-            text: "TTS complete",
-            timestamp: ttsEndTime,
-            turnOffset: ttsEndTime - conversationTurnStartTime,
-            turnStartTime: conversationTurnStartTime,
-            duration: ttsEndTime - ttsStartTime,
-            startTime: ttsStartTime
-          });
         })();
       }
       let thoughtResponsePairs = [];

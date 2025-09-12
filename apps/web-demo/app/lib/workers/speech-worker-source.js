@@ -183,6 +183,9 @@ let isGeneratingSilence = false;
 let isProcessingThought = false;
 let thoughtQueue = [];
 let streamComplete = false;
+let responseIndex = 0;
+let ttsSynthesisId = 0;
+let pendingSynthesisEvents = new Map();
 
 // timeline tracking
 let conversationStartTime = null;
@@ -192,8 +195,6 @@ let firstResponseTime = null;
 let firstThoughtTime = null;
 let sttStartTime = null;
 let sttEndTime = null;
-let ttsStartTime = null;
-let ttsEndTime = null;
 
 async function vad(buffer) {
   const input = new Tensor("float32", buffer, [1, buffer.length]);
@@ -259,8 +260,29 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
 
     if (splitter) { // add to TTS if available
       const textToAdd = thought === "" ? response : " " + response;
+      const currentSynthesisId = `synthesis_${++ttsSynthesisId}`;
+      const synthesisStartTime = Date.now();
+      
+      self.postMessage({
+        type: "tts_synthesis_start",
+        text: textToAdd.trim(),
+        responseIndex: responseIndex,
+        synthesisId: currentSynthesisId,
+        timestamp: synthesisStartTime,
+        turnOffset: synthesisStartTime - conversationTurnStartTime
+      });
+      
+      pendingSynthesisEvents.set(textToAdd.trim(), {
+        synthesisId: currentSynthesisId,
+        responseIndex: responseIndex,
+        startTime: synthesisStartTime,
+        text: textToAdd.trim()
+      });
+      
       splitter.push(textToAdd);
     }
+    
+    responseIndex++;
     
     const thoughtProcessingEndTime = Date.now();
     self.postMessage({ 
@@ -347,6 +369,9 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   thoughtQueue = [];
   isProcessingThought = false;
   streamComplete = false;
+  responseIndex = 0;
+  ttsSynthesisId = 0;
+  pendingSynthesisEvents.clear();
   
   conversationStartTime = Date.now();
   conversationTurnStartTime = conversationStartTime; 
@@ -355,8 +380,6 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   firstThoughtTime = null;
   sttStartTime = null;
   sttEndTime = null;
-  ttsStartTime = null;
-  ttsEndTime = null;
   
   self.postMessage({ 
     type: "conversation_turn_start", 
@@ -404,14 +427,6 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
     
     ttsStreamPromise = (async () => {
       let chunkCount = 0;
-      ttsStartTime = Date.now();
-      self.postMessage({ 
-        type: "tts_start", 
-        text: "Starting TTS", 
-        timestamp: ttsStartTime,
-        turnOffset: ttsStartTime - conversationTurnStartTime,
-        turnStartTime: conversationTurnStartTime
-      });
       
       try {
         for await (const chunk of stream) {
@@ -420,6 +435,22 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
           
           let audioData;
           const text = chunk.text || chunk.content || '';
+          const chunkEndTime = Date.now();
+          
+          const pendingEvent = pendingSynthesisEvents.get(text);
+          if (pendingEvent) {
+            self.postMessage({
+              type: "tts_synthesis_end",
+              text: text,
+              responseIndex: pendingEvent.responseIndex,
+              synthesisId: pendingEvent.synthesisId,
+              timestamp: chunkEndTime,
+              turnOffset: chunkEndTime - conversationTurnStartTime,
+              duration: chunkEndTime - pendingEvent.startTime,
+              startTime: pendingEvent.startTime
+            });
+            pendingSynthesisEvents.delete(text);
+          }
           
           if (chunk.audio) {
             if (chunk.audio.audio && chunk.audio.audio instanceof Float32Array) {
@@ -436,16 +467,6 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
       } catch (error) {
         console.error('Error in TTS stream:', error);
       }
-      ttsEndTime = Date.now();
-      self.postMessage({ 
-        type: "tts_end", 
-        text: "TTS complete", 
-        timestamp: ttsEndTime,
-        turnOffset: ttsEndTime - conversationTurnStartTime,
-        turnStartTime: conversationTurnStartTime,
-        duration: ttsEndTime - ttsStartTime,
-        startTime: ttsStartTime
-      });
     })();
   }
 

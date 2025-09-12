@@ -8,8 +8,8 @@ export type EventName =
   | "ThoughtApiFirstToken"
   | "LocalLMSubmit"
   | "LocalLMResponse"
-  | "TTSStart"
-  | "TTSEnd"
+  | "TTSSynthesisStart"
+  | "TTSSynthesisEnd"
   | "AudioPlaybackStart"
   | "AudioPlaybackEnd"
   | "ThoughtParsed";
@@ -20,6 +20,8 @@ export interface TimelineEvent {
   text?: string;
   prompt?: string;
   response?: string;
+  responseIndex?: number;
+  synthesisId?: string;
 }
 
 export interface TurnMetadata {
@@ -50,7 +52,7 @@ export class EventTracker {
     this.currentTurn = newTurn;
   }
 
-  addEvent(eventName: EventName, additionalData?: { text?: string; prompt?: string; response?: string }): void {
+  addEvent(eventName: EventName, additionalData?: { text?: string; prompt?: string; response?: string; responseIndex?: number; synthesisId?: string }): void {
     if (!this.currentTurn) {
       throw new Error("No active turn. Call startNewTurn() first.");
     }

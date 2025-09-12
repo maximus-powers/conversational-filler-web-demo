@@ -14,11 +14,13 @@ export interface ConversationMetrics {
 }
 
 export interface ProcessSegment {
-  type: 'stt' | 'smollm' | 'tts' | 'audio_playback';
+  type: 'stt' | 'smollm' | 'tts_synthesis' | 'audio_playback';
   startTime: number;
   endTime: number;
   duration: number;
   label: string;
+  responseIndex?: number;
+  synthesisId?: string;
 }
 
 export interface ThoughtSegment {
@@ -34,8 +36,8 @@ const getProcessColor = (type: ProcessSegment['type']) => {
       return 'bg-purple-500';
     case 'smollm':
       return 'bg-blue-500';
-    case 'tts':
-      return 'bg-orange-300'; // Lighter orange for synthesis
+    case 'tts_synthesis':
+      return 'bg-yellow-500'; // Yellow for individual synthesis
     case 'audio_playback':
       return 'bg-orange-600'; // Darker orange for actual playback
     default:
@@ -111,23 +113,24 @@ export function StatsPanel({
       }
     });
     
-    // TTS synthesis segments (keep for debugging)
-    const ttsStarts = allEvents.filter(e => e.eventName === "TTSStart");
-    const ttsEnds = allEvents.filter(e => e.eventName === "TTSEnd");
-    ttsStarts.forEach((start) => {
-      const end = ttsEnds.find(endEvent => endEvent.timestamp > start.timestamp);
+    const ttsSynthesisStarts = allEvents.filter(e => e.eventName === "TTSSynthesisStart");
+    const ttsSynthesisEnds = allEvents.filter(e => e.eventName === "TTSSynthesisEnd");
+    ttsSynthesisStarts.forEach((start) => {
+      const end = ttsSynthesisEnds.find(endEvent => 
+        endEvent.timestamp > start.timestamp && 
+        endEvent.responseIndex === start.responseIndex &&
+        endEvent.synthesisId === start.synthesisId
+      );
       if (end) {
         processTimeline.push({
-          type: 'tts',
+          type: 'tts_synthesis',
           startTime: start.timestamp,
           endTime: end.timestamp,
           duration: end.timestamp - start.timestamp,
-          label: 'TTS Synthesis'
+          label: `Synthesis #${start.responseIndex}`,
+          responseIndex: start.responseIndex,
+          synthesisId: start.synthesisId
         });
-        const endIndex = ttsEnds.indexOf(end);
-        if (endIndex > -1) {
-          ttsEnds.splice(endIndex, 1);
-        }
       }
     });
     
@@ -334,10 +337,12 @@ export function StatsPanel({
                 relevantEvent = waterfallEvents.find((e) => 
                   (e.eventName === 'STTEnd') && Math.abs(e.timestamp - segment.endTime) < 50
                 );
-              } else if (segment.type === 'tts') {
+              } else if (segment.type === 'tts_synthesis') {
                 relevantEvent = waterfallEvents.find((e) => 
-                  (e.eventName === 'TTSStart' || e.eventName === 'TTSEnd') && 
-                  e.timestamp >= segment.startTime && e.timestamp <= segment.endTime
+                  (e.eventName === 'TTSSynthesisStart' || e.eventName === 'TTSSynthesisEnd') && 
+                  e.timestamp >= segment.startTime && e.timestamp <= segment.endTime &&
+                  e.responseIndex === segment.responseIndex &&
+                  e.synthesisId === segment.synthesisId
                 );
               } else if (segment.type === 'audio_playback') {
                 relevantEvent = waterfallEvents.find((e) => 
@@ -368,6 +373,13 @@ export function StatsPanel({
               }
               if (responseEvent?.response) {
                 tooltipContent += `\nResponse: ${responseEvent.response}`;
+              }
+            } else if (segment.category === 'process' && segment.type === 'tts_synthesis') {
+              if (segment.synthesisId) {
+                tooltipContent += `\nSynthesis ID: ${segment.synthesisId}`;
+              }
+              if (relevantEvent?.text) {
+                tooltipContent += `\nText: "${relevantEvent.text}"`;
               }
             } else if (relevantEvent) {
               const content = relevantEvent.text || relevantEvent.prompt || relevantEvent.response;
