@@ -1,0 +1,21 @@
+{
+  "builds": [
+    {
+      "src": "apps/web-demo/package.json",
+      "use": "@vercel/next",
+      "config": {
+        "distDir": ".next"
+      }
+    }
+  ],
+  "routes": [
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "apps/web-demo/$1"
+    }
+  ],
+  "installCommand": "pnpm install --frozen-lockfile"
+}
