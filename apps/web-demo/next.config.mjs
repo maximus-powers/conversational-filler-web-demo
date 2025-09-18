@@ -1,6 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  transpilePackages: ["@workspace/ui"],
+  transpilePackages: ['@convo-filler/database', '@convo-filler/ui'],
   serverExternalPackages: ['sharp', 'onnxruntime-node'],
   webpack: (config, { isServer, webpack }) => {
     // transformers.js browser/node compatibility
