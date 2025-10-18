@@ -1,8 +1,5 @@
 import { AutoTokenizer, AutoModelForCausalLM, AutoModel, Tensor, pipeline } from "@huggingface/transformers";
 
-import { KokoroTTS, TextSplitterStream } from "kokoro-js";
-console.log('KokoroTTS imported:', typeof KokoroTTS, 'TextSplitterStream:', typeof TextSplitterStream);
-
 // wrap everything in async IIFE to handle top-level await
 (async () => {
 
@@ -29,25 +26,13 @@ self.postMessage({
   duration: "until_next",
 });
 
-// init TTS
-const model_id = "onnx-community/Kokoro-82M-v1.0-ONNX";
-let voice;
-let tts;
+// init TTS (ElevenLabs)
+let voice = "21m00Tcm4TlvDq8ikWAM"; // Rachel voice
+const availableVoices = {
+  "21m00Tcm4TlvDq8ikWAM": { name: "Rachel (Female)" },
+};
 
-try {
-  console.log('Initializing TTS with model:', model_id);
-  const hasWebGPU = typeof navigator !== 'undefined' && 'gpu' in navigator; 
-  const ttsDevice = hasWebGPU ? "webgpu" : "wasm"; // fallback to wasm if webgpu doens't work
-  
-  tts = await KokoroTTS.from_pretrained(model_id, {
-    dtype: "fp32",
-    device: ttsDevice,
-  });
-  console.log('TTS initialized successfully');  
-} catch (error) {
-  console.error('Failed to initialize TTS:', error);
-  self.postMessage({ type: "error", error: `TTS initialization failed: ${error.message}` });
-}
+console.log('ElevenLabs TTS ready');
 
 // init VAD
 console.log('Initializing VAD');
@@ -158,15 +143,18 @@ async function switchModel(newModelId) {
 }
 let messages = [];
 let thoughtProvider = "gemini"; // default to Gemini
-if (!voice && tts.voices) {
-  voice = Object.keys(tts.voices)[0] || "af_heart";
-}
+
+// Pipeline configuration state
+let currentEnableThoughts = false;
+let currentEnableSmolLM = true;
+let currentEnableTTS = false;
+
 console.log('SmolLM initialized successfully.');
 self.postMessage({
   type: "status",
   status: "ready",
   message: "Ready!",
-  voices: tts.voices,
+  voices: availableVoices,
 });
 
 const BUFFER = new Float32Array(MAX_BUFFER_DURATION * INPUT_SAMPLE_RATE);
@@ -258,11 +246,11 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
       });
     }
 
-    if (splitter) { // add to TTS if available
+    if (splitter) { // add to TTS queue if available
       const textToAdd = thought === "" ? response : " " + response;
       const currentSynthesisId = `synthesis_${++ttsSynthesisId}`;
       const synthesisStartTime = Date.now();
-      
+
       self.postMessage({
         type: "tts_synthesis_start",
         text: textToAdd.trim(),
@@ -271,15 +259,13 @@ const processThought = async (thought, userInput, thoughtResponsePairs, splitter
         timestamp: synthesisStartTime,
         turnOffset: synthesisStartTime - conversationTurnStartTime
       });
-      
-      pendingSynthesisEvents.set(textToAdd.trim(), {
+
+      splitter.push({
+        text: textToAdd.trim(),
         synthesisId: currentSynthesisId,
         responseIndex: responseIndex,
-        startTime: synthesisStartTime,
-        text: textToAdd.trim()
+        startTime: synthesisStartTime
       });
-      
-      splitter.push(textToAdd);
     }
     
     responseIndex++;
@@ -362,52 +348,53 @@ function clearSilenceTimer() {
   isGeneratingSilence = false;
 }
 
-const processInput = async (input, isVoiceMode, enableTTS) => {
+const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enableTTS) => {
   isPlaying = true;
   clearSilenceTimer();
-  
+
   thoughtQueue = [];
   isProcessingThought = false;
   streamComplete = false;
   responseIndex = 0;
   ttsSynthesisId = 0;
   pendingSynthesisEvents.clear();
-  
+
   conversationStartTime = Date.now();
-  conversationTurnStartTime = conversationStartTime; 
+  conversationTurnStartTime = conversationStartTime;
   inferenceStartTime = null;
   firstResponseTime = null;
   firstThoughtTime = null;
   sttStartTime = null;
   sttEndTime = null;
-  
-  self.postMessage({ 
-    type: "conversation_turn_start", 
+
+  self.postMessage({
+    type: "conversation_turn_start",
     timestamp: conversationStartTime,
     turnStartTime: conversationTurnStartTime,
     turnOffset: 0
   });
 
   let userText = input;
-  
-  if (isVoiceMode) {
+
+  // STT: Only transcribe if enableSTT is true and input is audio (Float32Array)
+  if (enableSTT && typeof input !== 'string') {
     sttStartTime = Date.now();
-    self.postMessage({ 
-      type: "stt_start", 
+    self.postMessage({
+      type: "stt_start",
       timestamp: sttStartTime,
       turnOffset: sttStartTime - conversationTurnStartTime
     });
-    
+
     userText = await transcriber(input).then(({ text }) => text.trim());
-    
+
     sttEndTime = Date.now();
     if (["", "[BLANK_AUDIO]"].includes(userText)) {
       isPlaying = false;
       return;
     }
-    self.postMessage({ 
-      type: "stt_end", 
-      text: userText, 
+    self.postMessage({
+      type: "stt_end",
+      text: userText,
       timestamp: sttEndTime,
       duration: sttEndTime - sttStartTime,
       startTime: sttStartTime,
@@ -420,48 +407,66 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
 
   let splitter = null;
   let ttsStreamPromise = null;
-  if (enableTTS && tts) {
-    splitter = new TextSplitterStream();
-    const streamOptions = voice ? { voice } : {};
-    const stream = tts.stream(splitter, streamOptions);
-    
+  if (enableTTS) {
+    splitter = []; // Simple array queue for text chunks
+
     ttsStreamPromise = (async () => {
-      let chunkCount = 0;
-      
       try {
-        for await (const chunk of stream) {
-          chunkCount++;
-          console.log(`TTS chunk ${chunkCount}:`, chunk);
-          
-          let audioData;
-          const text = chunk.text || chunk.content || '';
-          const chunkEndTime = Date.now();
-          
-          const pendingEvent = pendingSynthesisEvents.get(text);
-          if (pendingEvent) {
+        // Process TTS queue sequentially
+        while (true) {
+          if (splitter.length === 0) {
+            // Wait a bit for more chunks or completion
+            await new Promise(resolve => setTimeout(resolve, 50));
+
+            // If stream is complete and queue is empty, we're done
+            if (splitter.closed && splitter.length === 0) {
+              break;
+            }
+            continue;
+          }
+
+          const chunk = splitter.shift();
+          console.log(`Processing TTS chunk:`, chunk);
+
+          try {
+            // Call ElevenLabs API
+            const response = await fetch('/api/elevenlabs-tts', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                text: chunk.text,
+                voice_id: voice
+              })
+            });
+
+            if (!response.ok) {
+              console.error('ElevenLabs API error:', response.statusText);
+              continue;
+            }
+
+            const arrayBuffer = await response.arrayBuffer();
+            const chunkEndTime = Date.now();
+
+            // Send synthesis end event
             self.postMessage({
               type: "tts_synthesis_end",
-              text: text,
-              responseIndex: pendingEvent.responseIndex,
-              synthesisId: pendingEvent.synthesisId,
+              text: chunk.text,
+              responseIndex: chunk.responseIndex,
+              synthesisId: chunk.synthesisId,
               timestamp: chunkEndTime,
               turnOffset: chunkEndTime - conversationTurnStartTime,
-              duration: chunkEndTime - pendingEvent.startTime,
-              startTime: pendingEvent.startTime
+              duration: chunkEndTime - chunk.startTime,
+              startTime: chunk.startTime
             });
-            pendingSynthesisEvents.delete(text);
-          }
-          
-          if (chunk.audio) {
-            if (chunk.audio.audio && chunk.audio.audio instanceof Float32Array) {
-              audioData = chunk.audio.audio;
-            } else if (chunk.audio instanceof Float32Array) {
-              audioData = chunk.audio;
-            }
-          }
-                  
-          if (audioData && audioData.length > 0) {
-            self.postMessage({ type: "output", text: text, result: audioData });
+
+            // Send MP3 data to main thread for decoding and playback
+            self.postMessage({
+              type: "output_mp3",
+              text: chunk.text,
+              audioBuffer: arrayBuffer
+            }, [arrayBuffer]);
+          } catch (error) {
+            console.error('Error processing TTS chunk:', error);
           }
         }
       } catch (error) {
@@ -481,55 +486,20 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
   
   try {
     clearSilenceTimer();
-    
-    if (thoughtProvider === 'none') {
-      console.log('Using local-only mode with silence tokens');
-      
+
+    // Only fetch thoughts if enabled
+    if (enableThoughts) {
       thoughtStartTime = Date.now();
-      self.postMessage({ 
-        type: "thought_submit", 
+      self.postMessage({
+        type: "thought_submit",
         timestamp: thoughtStartTime,
         turnOffset: thoughtStartTime - conversationTurnStartTime,
         turnStartTime: conversationTurnStartTime
       });
-      
-      thoughtsPromise = Promise.resolve().then(async () => {
-        for (let i = 0; i < 4; i++) {
-          const silTokenTime = Date.now();
-          self.postMessage({ 
-            type: "thought_response", 
-            thought: "<|sil|>",
-            timestamp: silTokenTime,
-            thoughtIndex: i,
-            apiRequestStartTime: thoughtStartTime,
-            duration: 0, // Immediate for local generation
-            turnOffset: silTokenTime - conversationTurnStartTime,
-            turnStartTime: conversationTurnStartTime
-          });
-          thoughtQueue.push("<|sil|>"); // queue 4 sil tokens for smollm to process without thoughts
-        }
-        streamComplete = true;
-        
-        const thoughtEndTime = Date.now();
-        self.postMessage({ 
-          type: "thought_generation_end", 
-          timestamp: thoughtEndTime,
-          duration: thoughtEndTime - thoughtStartTime,
-          startTime: thoughtStartTime
-        });
-      });
-    } else {
-      thoughtStartTime = Date.now();
-      self.postMessage({ 
-        type: "thought_submit", 
-        timestamp: thoughtStartTime,
-        turnOffset: thoughtStartTime - conversationTurnStartTime,
-        turnStartTime: conversationTurnStartTime
-      });
-      
+
       const thoughtsEndpoint = '/api/chat-thoughts-gemini';
       console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
-      
+
       thoughtsPromise = fetch(thoughtsEndpoint, {
         method: 'POST',
         headers: {
@@ -539,15 +509,28 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
           messages: messages
         }),
       });
+    } else if (enableSmolLM) {
+      // If thoughts disabled but SmolLM enabled, generate silence tokens for SmolLM to process
+      console.log('Thoughts disabled, generating silence tokens for SmolLM');
+      thoughtsPromise = Promise.resolve().then(async () => {
+        streamComplete = true;
+        // Queue 3 silence tokens for SmolLM to process
+        for (let i = 0; i < 3; i++) {
+          thoughtQueue.push("<|sil|>");
+        }
+      });
     }
-    
-    immediateResponse = await processThought("<|sil|>", userText, [], splitter);
-    if (immediateResponse) {
-      thoughtResponsePairs.push({ thought: "<|sil|>", response: immediateResponse });
-      messages.push({ role: "assistant", content: immediateResponse });
+
+    // Only process with SmolLM if enabled
+    if (enableSmolLM) {
+      immediateResponse = await processThought("<|sil|>", userText, [], splitter);
+      if (immediateResponse) {
+        thoughtResponsePairs.push({ thought: "<|sil|>", response: immediateResponse });
+        messages.push({ role: "assistant", content: immediateResponse });
+      }
     }
-    
-    if (thoughtsPromise && thoughtProvider !== 'none') {
+
+    if (thoughtsPromise && enableThoughts) {
       const thoughtsResponse = await thoughtsPromise;
       
         // sil token handling
@@ -628,15 +611,16 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
             await waitForThoughtQueueComplete();
           }
         }
-        
-        const thoughtEndTime = Date.now();
-        self.postMessage({ 
-          type: "thought_generation_end", 
-          timestamp: thoughtEndTime,
-          duration: thoughtEndTime - thoughtStartTime,
-          startTime: thoughtStartTime
-        });
-    } else if (thoughtsPromise && thoughtProvider === 'none') {
+
+      const thoughtEndTime = Date.now();
+      self.postMessage({
+        type: "thought_generation_end",
+        timestamp: thoughtEndTime,
+        duration: thoughtEndTime - thoughtStartTime,
+        startTime: thoughtStartTime
+      });
+    } else if (thoughtsPromise && !enableThoughts && enableSmolLM) {
+      // Process silence tokens for SmolLM when thoughts are disabled
       await thoughtsPromise;
       await processThoughtQueue(userText, thoughtResponsePairs, splitter);
       await waitForThoughtQueueComplete();
@@ -645,16 +629,42 @@ const processInput = async (input, isVoiceMode, enableTTS) => {
     console.warn("Failed to generate thoughts:", error);
   }
   
-  await waitForThoughtQueueComplete();
-  
-  const fullResponse = thoughtResponsePairs.map(pair => pair.response).join(" ");
-  if (fullResponse !== immediateResponse) {
-    messages[messages.length - 1].content = fullResponse;
+  // Handle case where neither thoughts nor SmolLM are enabled
+  if (!enableThoughts && !enableSmolLM) {
+    // Just echo the user text as the response (or could call Gemini standalone)
+    const echoResponse = userText;
+    const msgId = Date.now().toString();
+    self.postMessage({
+      type: "message",
+      role: "assistant",
+      content: echoResponse,
+      messageId: msgId
+    });
+    messages.push({ role: "assistant", content: echoResponse });
+  } else if (enableThoughts && !enableSmolLM) {
+    // Thoughts enabled but SmolLM disabled - just return the thoughts directly
+    await waitForThoughtQueueComplete();
+    const thoughtsText = thoughtQueue.join(" ");
+    const msgId = Date.now().toString();
+    self.postMessage({
+      type: "message",
+      role: "assistant",
+      content: thoughtsText,
+      messageId: msgId
+    });
+    messages.push({ role: "assistant", content: thoughtsText });
+  } else {
+    await waitForThoughtQueueComplete();
+
+    const fullResponse = thoughtResponsePairs.map(pair => pair.response).join(" ");
+    if (fullResponse !== immediateResponse) {
+      messages[messages.length - 1].content = fullResponse;
+    }
   }
   
   if (splitter) {
     await new Promise(resolve => setTimeout(resolve, 50));
-    splitter.close();
+    splitter.closed = true; // Mark as closed so TTS promise knows to finish
   }
   
   if (ttsStreamPromise) {
@@ -694,7 +704,8 @@ const dispatchForTranscriptionAndResetAudioBuffer = (overflow) => {
     offset += prev.length;
   }
   paddedBuffer.set(buffer, offset);
-  processInput(paddedBuffer, true, true);
+  // For voice input, STT is always enabled (true), use current config for thoughts/SmolLM/TTS
+  processInput(paddedBuffer, true, currentEnableThoughts, currentEnableSmolLM, currentEnableTTS);
 
   // set overflow (if present) and reset the rest of the audio buffer
   if (overflow) {
@@ -717,11 +728,11 @@ self.onmessage = async (event) => {
 
   switch (type) {
     case "init":
-      self.postMessage({ 
-        type: "status", 
-        status: "ready", 
-        voices: tts.voices,
-        message: "All models loaded" 
+      self.postMessage({
+        type: "status",
+        status: "ready",
+        voices: availableVoices,
+        message: "All models loaded"
       });
       return;
       
@@ -731,13 +742,23 @@ self.onmessage = async (event) => {
 
     case "set_thought_provider":
       thoughtProvider = event.data.provider;
-      console.log(`Thought provider set to: ${thoughtProvider}`);
+      currentEnableThoughts = (thoughtProvider !== "none");
+      console.log(`Thought provider set to: ${thoughtProvider}, enableThoughts: ${currentEnableThoughts}`);
       return;
 
-    case "set_model":
-      const newModelId = event.data.modelId;
-      console.log(`Switching to model: ${newModelId}`);
-      switchModel(newModelId);
+    case "set_smollm_enabled":
+      currentEnableSmolLM = event.data.enabled;
+      console.log(`SmolLM enabled set to: ${currentEnableSmolLM}`);
+      return;
+
+    case "set_tts_enabled":
+      currentEnableTTS = event.data.enabled;
+      console.log(`TTS enabled set to: ${currentEnableTTS}`);
+      return;
+
+    case "set_stt_enabled":
+      // STT state is managed by audio context setup/teardown in main thread
+      console.log(`STT enabled set to: ${event.data.enabled}`);
       return;
       
     case "playback_ended":
@@ -749,8 +770,17 @@ self.onmessage = async (event) => {
       // for text mode
       const text = event.data.text;
       const enableTTS = event.data.enableTTS || false;
+      const enableThoughts = event.data.enableThoughts !== undefined ? event.data.enableThoughts : true;
+      const enableSmolLM = event.data.enableSmolLM !== undefined ? event.data.enableSmolLM : true;
+
+      // Update current config state for voice input path to use
+      currentEnableThoughts = enableThoughts;
+      currentEnableSmolLM = enableSmolLM;
+      currentEnableTTS = enableTTS;
+
+      console.log('Worker received process_text with:', { enableTTS, enableThoughts, enableSmolLM });
       if (text) {
-        await processInput(text, false, enableTTS);
+        await processInput(text, false, enableThoughts, enableSmolLM, enableTTS);
       }
       return;
       

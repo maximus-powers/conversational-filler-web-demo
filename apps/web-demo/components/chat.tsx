@@ -2,11 +2,11 @@
 
 import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
-import { Bot, User, Loader2, Send, Mic, MicOff, Eye, EyeOff } from "lucide-react";
+import { Bot, User, Loader2, Send, Eye, EyeOff } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
-import { UnifiedPipeline, InferenceMode } from "../app/lib/unified-pipeline";
+import { UnifiedPipeline, PipelineConfig } from "../app/lib/unified-pipeline";
 import { Timeline } from "./timeline";
-import { InferenceModeSwitcher } from "./inference-mode-switcher";
+import { PipelineControls } from "./pipeline-controls";
 import { StatsPanel } from "./stats-panel";
 import { EventData } from "../app/lib/event-tracker";
 import { saveConversation } from "../app/lib/utils/utils";
@@ -53,18 +53,13 @@ export function Chat({
   const [conversationStartTime, setConversationStartTime] = useState<
     number | null
   >(null);
-  const [mode, setMode] = useState<InferenceMode>(voiceMode ? "voice" : "text");
+  // pipeline config
+  const [enableSTT, setEnableSTT] = useState(voiceMode || false);
+  const [enableThoughts, setEnableThoughts] = useState(config?.thoughtModel !== "none");
+  const [enableSmolLM, setEnableSmolLM] = useState(config?.localModel !== null);
+  const [enableTTS, setEnableTTS] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [selectedVoice, setSelectedVoice] = useState<string>("af_heart");
-  const [availableVoices, setAvailableVoices] = useState<Record<string, any>>(
-    {},
-  );
-  const [thoughtProvider, setThoughtProvider] = useState<"gemini" | "none">(
-    config?.thoughtModel || "gemini"
-  );
-  const [selectedModel, setSelectedModel] = useState<"maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct" | "none">(
-    (config?.localModel as any) || "maximuspowers/smollm-convo-filler-onnx-official"
-  );
+
   const [conversationId] = useState<string>(() => crypto.randomUUID());
   const [showTimeline, setShowTimeline] = useState(false);
   const [showStatsPanel, setShowStatsPanel] = useState(!feedbackMode);
@@ -91,14 +86,14 @@ export function Chat({
   };
 
 
-  const handleResponseComplete = (_messageId: string, fullResponse: string, userPrompt?: string) => {    
+  const handleResponseComplete = (_messageId: string, fullResponse: string, userPrompt?: string) => {
     const promptToUse = userPrompt || currentUserPrompt;
     if (!feedbackMode && promptToUse) {
       saveConversation({
         conversationId,
-        localModel: selectedModel === "none" ? null : selectedModel,
-        thoughtModel: thoughtProvider,
-        voiceMode: mode === "voice",
+        localModel: enableSmolLM ? "maximuspowers/smollm-convo-filler-onnx-official" : null,
+        thoughtModel: enableThoughts ? "gemini" : "none",
+        voiceMode: enableSTT,
         userPrompt: promptToUse,
         aiResponse: fullResponse,
         eventData: eventDataRef.current || eventData,
@@ -137,6 +132,13 @@ export function Chat({
       setConversationStartTime(initStartTime);
 
       setModelLoadingProgress("Loading models...");
+
+      const pipelineConfig: PipelineConfig = {
+        enableSTT,
+        enableThoughts,
+        enableSmolLM,
+        enableTTS,
+      };
 
       pipelineRef.current = new UnifiedPipeline({
         onMessageReceived: (role, content, messageId) => {
@@ -216,12 +218,10 @@ export function Chat({
         onConversationStart: (startTime: number) => {
           setConversationStartTime(startTime);
         },
-      });
+      }, pipelineConfig);
 
       try {
-        await pipelineRef.current.initialize(mode);
-        const voices = pipelineRef.current.getVoices();
-        setAvailableVoices(voices);
+        await pipelineRef.current.initialize();
 
         const initEndTime = Date.now();
         const loadTime = ((initEndTime - initStartTime) / 1000).toFixed(2);
@@ -242,23 +242,31 @@ export function Chat({
     };
   }, []);
 
-  const handleModeChange = async (newMode: InferenceMode) => {
-    if (!pipelineRef.current || newMode === mode) return;
+  const handleToggleSTT = async (enabled: boolean) => {
+    setEnableSTT(enabled);
+    if (pipelineRef.current) {
+      await pipelineRef.current.toggleSTT(enabled);
+    }
+  };
 
-    setModelLoading(true);
-    setModelLoadingProgress(`Switching to ${newMode} mode...`);
+  const handleToggleThoughts = (enabled: boolean) => {
+    setEnableThoughts(enabled);
+    if (pipelineRef.current) {
+      pipelineRef.current.toggleThoughts(enabled);
+    }
+  };
 
-    try {
-      await pipelineRef.current.switchMode(newMode);
-      setMode(newMode);
-      const voices = pipelineRef.current.getVoices();
-      setAvailableVoices(voices);
-      console.log(`Switched to ${newMode} mode`);
-    } catch (error) {
-      console.error("Failed to switch mode:", error);
-    } finally {
-      setModelLoading(false);
-      setModelLoadingProgress("");
+  const handleToggleSmolLM = (enabled: boolean) => {
+    setEnableSmolLM(enabled);
+    if (pipelineRef.current) {
+      pipelineRef.current.toggleSmolLM(enabled);
+    }
+  };
+
+  const handleToggleTTS = (enabled: boolean) => {
+    setEnableTTS(enabled);
+    if (pipelineRef.current) {
+      pipelineRef.current.toggleTTS(enabled);
     }
   };
 
@@ -325,23 +333,6 @@ export function Chat({
     setCurrentAssistantMessageId(null);
   };
 
-  useEffect(() => {
-    if (selectedVoice && pipelineRef.current) {
-      pipelineRef.current.setVoice(selectedVoice);
-    }
-  }, [selectedVoice]);
-
-  useEffect(() => {
-    if (pipelineRef.current) {
-      pipelineRef.current.setThoughtProvider(thoughtProvider);
-    }
-  }, [thoughtProvider]);
-
-  useEffect(() => {
-    if (selectedModel && pipelineRef.current) {
-      pipelineRef.current.setModel(selectedModel);
-    }
-  }, [selectedModel]);
 
   return (
     <div className="flex h-full w-full overflow-hidden">
@@ -349,7 +340,7 @@ export function Chat({
         <Timeline
           eventData={eventData}
           conversationStartTime={conversationStartTime}
-          mode={mode}
+          mode={enableSTT ? "voice" : "text"}
         />
       )}
 
@@ -358,52 +349,25 @@ export function Chat({
         {!feedbackMode && (
           <div className="bg-card border-b px-6 py-2 flex-shrink-0">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <InferenceModeSwitcher
-                  currentMode={mode}
-                  onModeChange={handleModeChange}
+              <div className="flex items-center gap-3">
+                <PipelineControls
+                  enableSTT={enableSTT}
+                  enableThoughts={enableThoughts}
+                  enableSmolLM={enableSmolLM}
+                  enableTTS={enableTTS}
+                  onToggleSTT={handleToggleSTT}
+                  onToggleThoughts={handleToggleThoughts}
+                  onToggleSmolLM={handleToggleSmolLM}
+                  onToggleTTS={handleToggleTTS}
                   disabled={modelLoading || isLoading}
                 />
 
-                {mode === "voice" && Object.keys(availableVoices).length > 0 && (
-                  <select
-                    value={selectedVoice}
-                    onChange={(e) => setSelectedVoice(e.target.value)}
-                    className="text-sm px-2 border rounded-md bg-background"
-                    disabled={modelLoading}
-                  >
-                    {Object.entries(availableVoices).map(
-                      ([id, voice]: [string, any]) => (
-                        <option key={id} value={id}>
-                          {voice.name || id}
-                        </option>
-                      ),
-                    )}
-                  </select>
+                {isListening && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <div className="h-2 w-2 bg-red-500 rounded-full animate-pulse" />
+                    <span>Listening...</span>
+                  </div>
                 )}
-
-                <select
-                  value={thoughtProvider}
-                  onChange={(e) => setThoughtProvider(e.target.value as "gemini" | "none")}
-                  className="text-sm px-2 py-1 border rounded-md bg-background h-8"
-                  disabled={modelLoading}
-                  title="Select thought provider"
-                >
-                  <option value="gemini">Google (Gemini)</option>
-                  <option value="none">None</option>
-                </select>
-
-                <select
-                  value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value as "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct" | "none")}
-                  className="text-sm px-2 py-1 border rounded-md bg-background h-8"
-                  disabled={modelLoading}
-                  title="Select SmolLM model"
-                >
-                  <option value="maximuspowers/smollm-convo-filler-onnx-official">SmolLM Convo Filler</option>
-                  <option value="HuggingFaceTB/SmolLM-360M-Instruct">SmolLM 360M Instruct</option>
-                  <option value="none">None (Gemini only)</option>
-                </select>
               </div>
 
               <div className="flex items-center gap-2">
@@ -439,16 +403,6 @@ export function Chat({
                 <ThemeToggle />
               </div>
             </div>
-
-            {/* Status Bar */}
-            {mode === "voice" && isListening && (
-              <div className="mt-2 text-sm text-muted-foreground flex items-center gap-2">
-                <div className="flex items-center gap-2">
-                  <Mic className="h-4 w-4 text-green-500 animate-pulse" />
-                  <span className="text-green-500">Listening...</span>
-                </div>
-              </div>
-            )}
           </div>
         )}
 
@@ -469,9 +423,9 @@ export function Chat({
                 Welcome to the Conversational Filler
               </h2>
               <p className="text-sm max-w-md">
-                {mode === "text"
-                  ? "Type a message below to start chatting with SmolLM, enhanced with context from Gemini."
-                  : "Just start speaking! I'm listening and will respond with voice."}
+                {enableSTT
+                  ? "Just start speaking! I'm listening and will respond."
+                  : "Type a message below to start chatting."}
               </p>
               {modelLoading && (
                 <div className="mt-6">
@@ -546,7 +500,7 @@ export function Chat({
               placeholder={
                 modelLoading
                   ? "Waiting for models to load..."
-                  : mode === "voice"
+                  : enableSTT
                     ? "Type a message or use voice recording..."
                     : "Type your message..."
               }

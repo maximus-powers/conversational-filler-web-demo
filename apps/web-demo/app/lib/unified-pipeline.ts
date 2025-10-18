@@ -1,7 +1,12 @@
 import { INPUT_SAMPLE_RATE } from "./audio-constants";
 import { EventTracker, TurnMetadata } from "./event-tracker";
 
-export type InferenceMode = "text" | "voice";
+export interface PipelineConfig {
+  enableSTT: boolean;
+  enableThoughts: boolean;
+  enableSmolLM: boolean;
+  enableTTS: boolean;
+}
 
 export interface UnifiedPipelineConfig {
   onMessageReceived?: (
@@ -18,15 +23,13 @@ export interface UnifiedPipelineConfig {
 }
 
 export interface UnifiedPipelineState {
-  mode: InferenceMode;
+  pipelineConfig: PipelineConfig;
   isReady: boolean;
   isProcessing: boolean;
   isRecording: boolean;
   isPlaying: boolean;
   voices: Record<string, any>;
   currentMessageId: string | null;
-  thoughtProvider: "gemini" | "none";
-  selectedModel: "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct" | "none";
 }
 
 export class UnifiedPipeline {
@@ -41,32 +44,49 @@ export class UnifiedPipeline {
   private eventTracker = new EventTracker();
   private hasStartedPlayback = false;
 
-  constructor(config: UnifiedPipelineConfig) {
+  constructor(config: UnifiedPipelineConfig, pipelineConfig?: PipelineConfig) {
     this.config = config;
     this.state = {
-      mode: "text",
+      pipelineConfig: pipelineConfig || {
+        enableSTT: false,
+        enableThoughts: true,
+        enableSmolLM: true,
+        enableTTS: false,
+      },
       isReady: false,
       isProcessing: false,
       isRecording: false,
       isPlaying: false,
       voices: {},
       currentMessageId: null,
-      thoughtProvider: "gemini",
-      selectedModel: "maximuspowers/smollm-convo-filler-onnx-official",
     };
   }
 
-  async initialize(mode: InferenceMode = "text") {
-    this.state.mode = mode;
+  async initialize() {
 
     try {
-      this.worker = new Worker("/speech-worker-bundled.js");
+      // Add cache busting parameter to force reload of worker
+      const workerUrl = `/speech-worker-bundled.js?v=${Date.now()}`;
+      this.worker = new Worker(workerUrl);
       this.setupWorkerListeners();
-      if (mode === "voice") {
+
+      // Only set up audio contexts if STT is enabled
+      if (this.state.pipelineConfig.enableSTT) {
         await this.setupAudioContexts();
       }
+
       this.worker.postMessage({ type: "init" });
       await this.waitForWorkerReady();
+
+      // Send initial pipeline configuration to worker
+      const config = this.state.pipelineConfig;
+      if (this.worker) {
+        const provider = config.enableThoughts ? "gemini" : "none";
+        this.worker.postMessage({ type: "set_thought_provider", provider });
+        this.worker.postMessage({ type: "set_smollm_enabled", enabled: config.enableSmolLM });
+        this.worker.postMessage({ type: "set_tts_enabled", enabled: config.enableTTS });
+      }
+
       this.state.isReady = true;
     } catch (error) {
       console.error("Failed to initialize:", error);
@@ -113,6 +133,9 @@ export class UnifiedPipeline {
           break;
         case "output":
           this.handleAudioOutput(data);
+          break;
+        case "output_mp3":
+          this.handleMP3Output(data);
           break;
         case "stt_start":
           this.handleSTTStart();
@@ -180,7 +203,7 @@ export class UnifiedPipeline {
 
 
   private handleAudioOutput(data: any) {
-    if (this.state.mode !== "voice" || !data.result) return;
+    if (!this.state.pipelineConfig.enableSTT || !data.result) return;
     const audioBuffer = data.result; // { type: 'output', text: string, result: Float32Array }
     if (this.playbackNode) {
       if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
@@ -188,9 +211,65 @@ export class UnifiedPipeline {
         this.eventTracker.addEvent("AudioPlaybackStart");
         this.config.onEventData?.(this.eventTracker.getData());
       }
-      
+
       this.state.isPlaying = true;
       this.playbackNode.port.postMessage(audioBuffer);
+    }
+  }
+
+  private async handleMP3Output(data: any) {
+    if (!data.audioBuffer) return;
+
+    // Only play audio if TTS is enabled
+    if (!this.state.pipelineConfig.enableTTS) return;
+
+    try {
+      // Decode MP3 on main thread
+      if (!this.audioContext) {
+        this.audioContext = new AudioContext({ sampleRate: 24000 });
+      }
+
+      const audioBuffer = await this.audioContext.decodeAudioData(data.audioBuffer);
+      const float32Array = audioBuffer.getChannelData(0);
+
+      // If STT is disabled (text mode), play directly through audio context
+      if (!this.state.pipelineConfig.enableSTT) {
+        const source = this.audioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(this.audioContext.destination);
+        source.start();
+
+        if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
+          this.hasStartedPlayback = true;
+          this.eventTracker.addEvent("AudioPlaybackStart");
+          this.config.onEventData?.(this.eventTracker.getData());
+        }
+
+        source.onended = () => {
+          // Notify worker that playback ended
+          if (this.worker) {
+            this.worker.postMessage({ type: "playback_ended" });
+          }
+
+          if (this.eventTracker.hasActiveTurn()) {
+            this.eventTracker.addEvent("AudioPlaybackEnd");
+            this.config.onEventData?.(this.eventTracker.getData());
+          }
+        };
+      }
+      // If STT enabled (voice mode), send to playback worklet
+      else if (this.state.pipelineConfig.enableSTT && this.playbackNode) {
+        if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
+          this.hasStartedPlayback = true;
+          this.eventTracker.addEvent("AudioPlaybackStart");
+          this.config.onEventData?.(this.eventTracker.getData());
+        }
+
+        this.state.isPlaying = true;
+        this.playbackNode.port.postMessage(float32Array);
+      }
+    } catch (error) {
+      console.error('Error decoding MP3:', error);
     }
   }
 
@@ -386,7 +465,16 @@ export class UnifiedPipeline {
   }
 
   async processText(text: string) {
-    if (this.state.selectedModel === "none") {
+    const config = this.state.pipelineConfig;
+
+    console.log('processText called with config:', {
+      enableTTS: config.enableTTS,
+      enableThoughts: config.enableThoughts,
+      enableSmolLM: config.enableSmolLM
+    });
+
+    // If no SmolLM and no thoughts, use Gemini standalone
+    if (!config.enableSmolLM && !config.enableThoughts) {
       return this.processTextWithGeminiStandalone(text);
     }
 
@@ -396,14 +484,14 @@ export class UnifiedPipeline {
 
     this.state.isProcessing = true;
     this.state.currentMessageId = null;
-    
+
     if (!this.eventTracker.hasActiveTurn()) {
       this.startNewTurn();
     }
-    
+
     const userMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     this.config.onMessageReceived?.("user", text, userMessageId);
-    
+
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("UserInputReceived", { text });
       this.config.onEventData?.(this.eventTracker.getData());
@@ -412,7 +500,9 @@ export class UnifiedPipeline {
     this.worker.postMessage({
       type: "process_text",
       text: text.trim(),
-      enableTTS: this.state.mode === "voice",
+      enableTTS: config.enableTTS,
+      enableThoughts: config.enableThoughts,
+      enableSmolLM: config.enableSmolLM,
     });
   }
 
@@ -493,18 +583,53 @@ export class UnifiedPipeline {
     }
   }
 
-  setThoughtProvider(provider: "gemini" | "none") {
-    this.state.thoughtProvider = provider;
+  updatePipelineConfig(config: Partial<PipelineConfig>) {
+    this.state.pipelineConfig = { ...this.state.pipelineConfig, ...config };
+
+    // Update worker with new config
     if (this.worker) {
-      this.worker.postMessage({ type: "set_thought_provider", provider });
+      if (config.enableThoughts !== undefined) {
+        const provider = config.enableThoughts ? "gemini" : "none";
+        this.worker.postMessage({ type: "set_thought_provider", provider });
+      }
+      if (config.enableSmolLM !== undefined) {
+        this.worker.postMessage({ type: "set_smollm_enabled", enabled: config.enableSmolLM });
+      }
+      if (config.enableTTS !== undefined) {
+        this.worker.postMessage({ type: "set_tts_enabled", enabled: config.enableTTS });
+      }
+      if (config.enableSTT !== undefined) {
+        this.worker.postMessage({ type: "set_stt_enabled", enabled: config.enableSTT });
+      }
     }
   }
 
-  setModel(modelId: "maximuspowers/smollm-convo-filler-onnx-official" | "HuggingFaceTB/SmolLM-360M-Instruct" | "none") {
-    this.state.selectedModel = modelId;
-    if (this.worker && modelId !== "none") {
-      this.worker.postMessage({ type: "set_model", modelId });
+  async toggleSTT(enable: boolean) {
+    this.state.pipelineConfig.enableSTT = enable;
+
+    if (enable && !this.audioContext) {
+      // Set up audio contexts if not already done
+      await this.setupAudioContexts();
+    } else if (!enable && this.audioContext) {
+      // Clean up audio contexts
+      this.disposeAudioContexts();
     }
+  }
+
+  toggleThoughts(enable: boolean) {
+    this.updatePipelineConfig({ enableThoughts: enable });
+  }
+
+  toggleSmolLM(enable: boolean) {
+    this.updatePipelineConfig({ enableSmolLM: enable });
+  }
+
+  toggleTTS(enable: boolean) {
+    this.updatePipelineConfig({ enableTTS: enable });
+  }
+
+  getPipelineConfig(): PipelineConfig {
+    return { ...this.state.pipelineConfig };
   }
 
   getVoices() {
@@ -513,9 +638,9 @@ export class UnifiedPipeline {
 
   private startNewTurn(): void {
     const metadata: TurnMetadata = {
-      localModel: this.state.selectedModel === "maximuspowers/smollm-convo-filler-onnx-official" ? "smollm-finetuned" : "smollm-base",
-      thoughtModel: this.state.thoughtProvider === "gemini" ? "gemini-flash-2.0" : "none",
-      voiceMode: this.state.mode === "voice"
+      localModel: this.state.pipelineConfig.enableSmolLM ? "smollm-finetuned" : "none",
+      thoughtModel: this.state.pipelineConfig.enableThoughts ? "gemini-flash-2.0" : "none",
+      voiceMode: this.state.pipelineConfig.enableSTT
     };
     this.eventTracker.startNewTurn(metadata);
   }
@@ -528,10 +653,23 @@ export class UnifiedPipeline {
     this.eventTracker.reset();
   }
 
-  async switchMode(newMode: InferenceMode) {
-    if (newMode === this.state.mode) return;
-    this.dispose(); // clean up old mode
-    await this.initialize(newMode);
+  private disposeAudioContexts() {
+    if (this.state.isRecording && this.worker) {
+      this.state.isRecording = false;
+      this.worker.postMessage({ type: "stop_recording" });
+    }
+    if (this.mediaStream) {
+      this.mediaStream.getTracks().forEach((track) => track.stop());
+      this.mediaStream = null;
+    }
+    if (this.worklet) {
+      this.worklet.disconnect();
+      this.worklet = null;
+    }
+    if (this.playbackNode) {
+      this.playbackNode.disconnect();
+      this.playbackNode = null;
+    }
   }
 
   dispose() {
