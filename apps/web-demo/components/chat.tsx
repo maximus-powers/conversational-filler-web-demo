@@ -66,7 +66,7 @@ export function Chat({
     (config?.localModel as any) || "maximuspowers/smollm-convo-filler-onnx-official"
   );
   const [conversationId] = useState<string>(() => crypto.randomUUID());
-  const [showTimeline, setShowTimeline] = useState(!feedbackMode);
+  const [showTimeline, setShowTimeline] = useState(false);
   const [showStatsPanel, setShowStatsPanel] = useState(!feedbackMode);
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
@@ -429,11 +429,11 @@ export function Chat({
 
                 <Button
                   onClick={clearChat}
-                  variant="outline"
                   size="sm"
                   disabled={messages.length === 0}
+                  className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
                 >
-                  Clear Chat
+                  Reset
                 </Button>
 
                 <ThemeToggle />
@@ -453,8 +453,8 @@ export function Chat({
         )}
 
         {/* Stats Panel */}
-        {showStatsPanel && (
-          <StatsPanel 
+        {showStatsPanel && eventData && conversationStartTime && (
+          <StatsPanel
             eventData={eventData}
             conversationStartTime={conversationStartTime}
           />
