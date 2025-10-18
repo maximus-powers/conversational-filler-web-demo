@@ -1,14 +1,7 @@
 import { INPUT_SAMPLE_RATE } from "./audio-constants";
 import { EventTracker, TurnMetadata } from "./event-tracker";
 
-export interface PipelineConfig {
-  enableSTT: boolean;
-  enableThoughts: boolean;
-  enableSmolLM: boolean;
-  enableTTS: boolean;
-}
-
-export interface UnifiedPipelineConfig {
+export interface PipelineCallbacks {
   onMessageReceived?: (
     role: "user" | "assistant",
     content: string,
@@ -22,8 +15,13 @@ export interface UnifiedPipelineConfig {
   onConversationStart?: (startTime: number) => void;
 }
 
-export interface UnifiedPipelineState {
-  pipelineConfig: PipelineConfig;
+export interface PipelineState {
+  features: {
+    enableSTT: boolean;
+    enableThoughts: boolean;
+    enableSmolLM: boolean;
+    enableTTS: boolean;
+  };
   isReady: boolean;
   isProcessing: boolean;
   isRecording: boolean;
@@ -38,16 +36,16 @@ export class UnifiedPipeline {
   private mediaStream: MediaStream | null = null;
   private worklet: AudioWorkletNode | null = null;
   private playbackNode: AudioWorkletNode | null = null;
-  private config: UnifiedPipelineConfig;
-  private state: UnifiedPipelineState;
+  private callbacks: PipelineCallbacks;
+  private state: PipelineState;
   private isWorkerReady = false;
   private eventTracker = new EventTracker();
   private hasStartedPlayback = false;
 
-  constructor(config: UnifiedPipelineConfig, pipelineConfig?: PipelineConfig) {
-    this.config = config;
+  constructor(callbacks: PipelineCallbacks, features?: PipelineState['features']) {
+    this.callbacks = callbacks;
     this.state = {
-      pipelineConfig: pipelineConfig || {
+      features: features || {
         enableSTT: false,
         enableThoughts: true,
         enableSmolLM: true,
@@ -65,26 +63,38 @@ export class UnifiedPipeline {
   async initialize() {
 
     try {
-      // Add cache busting parameter to force reload of worker
+      // force reload of worker
       const workerUrl = `/speech-worker-bundled.js?v=${Date.now()}`;
       this.worker = new Worker(workerUrl);
       this.setupWorkerListeners();
 
-      // Only set up audio contexts if STT is enabled
-      if (this.state.pipelineConfig.enableSTT) {
+      if (this.state.features.enableSTT) {
         await this.setupAudioContexts();
       }
-
       this.worker.postMessage({ type: "init" });
-      await this.waitForWorkerReady();
 
-      // Send initial pipeline configuration to worker
-      const config = this.state.pipelineConfig;
+      // wait for worker to be ready
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Worker initialization timed out"));
+        }, 60000);
+        const checkReady = () => {
+          if (this.isWorkerReady) {
+            clearTimeout(timeout);
+            resolve();
+          } else {
+            setTimeout(checkReady, 100);
+          }
+        };
+        checkReady();
+      });
+
+      const features = this.state.features;
       if (this.worker) {
-        const provider = config.enableThoughts ? "gemini" : "none";
+        const provider = features.enableThoughts ? "gemini" : "none";
         this.worker.postMessage({ type: "set_thought_provider", provider });
-        this.worker.postMessage({ type: "set_smollm_enabled", enabled: config.enableSmolLM });
-        this.worker.postMessage({ type: "set_tts_enabled", enabled: config.enableTTS });
+        this.worker.postMessage({ type: "set_smollm_enabled", enabled: features.enableSmolLM });
+        this.worker.postMessage({ type: "set_tts_enabled", enabled: features.enableTTS });
       }
 
       this.state.isReady = true;
@@ -94,26 +104,8 @@ export class UnifiedPipeline {
     }
   }
 
-  private async waitForWorkerReady(): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error("Worker initialization timed out"));
-      }, 60000);
-      const checkReady = () => {
-        if (this.isWorkerReady) {
-          clearTimeout(timeout);
-          resolve();
-        } else {
-          setTimeout(checkReady, 100);
-        }
-      };
-      checkReady();
-    });
-  }
-
   private setupWorkerListeners() {
     if (!this.worker) return;
-
     this.worker.onerror = (error) => {
       console.error("Worker error:", error);
     };
@@ -123,7 +115,6 @@ export class UnifiedPipeline {
         console.error("Worker error:", data.error);
         return;
       }
-
       switch (data.type) {
         case "info":
           console.log("Worker info:", data.message);
@@ -138,13 +129,21 @@ export class UnifiedPipeline {
           this.handleMP3Output(data);
           break;
         case "stt_start":
-          this.handleSTTStart();
+          if (this.eventTracker.hasActiveTurn()) {
+            this.eventTracker.addEvent("STTStart");
+            this.callbacks.onEventData?.(this.eventTracker.getData());
+          }
           break;
         case "stt_end":
           this.handleSTTEnd(data);
           break;
         case "conversation_turn_start":
-          this.handleConversationTurnStart(data);
+          this.state.currentMessageId = null;
+          this.hasStartedPlayback = false;
+          this.startNewTurn();
+          if (data.timestamp && this.callbacks.onConversationStart) {
+            this.callbacks.onConversationStart(data.timestamp);
+          }
           break;
         case "smollm_submit":
           this.handleSmolLMSubmit(data);
@@ -159,10 +158,16 @@ export class UnifiedPipeline {
           this.handleTTSSynthesisEnd(data);
           break;
         case "thought_submit":
-          this.handleThoughtSubmit();
+          if (this.eventTracker.hasActiveTurn()) {
+            this.eventTracker.addEvent("ThoughtApiSubmit");
+            this.callbacks.onEventData?.(this.eventTracker.getData());
+          }
           break;
         case "first_thought_token_received":
-          this.handleFirstThoughtToken();
+          if (this.eventTracker.hasActiveTurn()) {
+            this.eventTracker.addEvent("ThoughtApiFirstToken");
+            this.callbacks.onEventData?.(this.eventTracker.getData());
+          }
           break;
         case "thought_response":
           this.handleThoughtResponse(data);
@@ -179,37 +184,26 @@ export class UnifiedPipeline {
       this.state.isRecording = true;
       if (this.eventTracker.hasActiveTurn()) {
         this.eventTracker.addEvent("VoiceDetectionStart");
-        this.config.onEventData?.(this.eventTracker.getData());
+        this.callbacks.onEventData?.(this.eventTracker.getData());
       }
     } else if (data.status === "recording_end") {
       this.state.isRecording = false;
       if (this.eventTracker.hasActiveTurn()) {
         this.eventTracker.addEvent("VoiceDetectionEnd");
-        this.config.onEventData?.(this.eventTracker.getData());
+        this.callbacks.onEventData?.(this.eventTracker.getData());
       }
     }
-    this.config.onStatusChange?.(data.status, data.message || "");
+    this.callbacks.onStatusChange?.(data.status, data.message || "");
   }
-
-  private handleTranscription(text: string) {
-    if (!text) return;
-    this.config.onMessageReceived?.(
-      "user",
-      text,
-      `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
-    );
-    this.config.onTranscriptionReceived?.(text);
-  }
-
 
   private handleAudioOutput(data: any) {
-    if (!this.state.pipelineConfig.enableSTT || !data.result) return;
+    if (!this.state.features.enableSTT || !data.result) return;
     const audioBuffer = data.result; // { type: 'output', text: string, result: Float32Array }
     if (this.playbackNode) {
       if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
         this.hasStartedPlayback = true;
         this.eventTracker.addEvent("AudioPlaybackStart");
-        this.config.onEventData?.(this.eventTracker.getData());
+        this.callbacks.onEventData?.(this.eventTracker.getData());
       }
 
       this.state.isPlaying = true;
@@ -219,109 +213,94 @@ export class UnifiedPipeline {
 
   private async handleMP3Output(data: any) {
     if (!data.audioBuffer) return;
-
-    // Only play audio if TTS is enabled
-    if (!this.state.pipelineConfig.enableTTS) return;
+    if (!this.state.features.enableTTS) return;
 
     try {
-      // Decode MP3 on main thread
-      if (!this.audioContext) {
+      if (!this.audioContext) { // use main thread
         this.audioContext = new AudioContext({ sampleRate: 24000 });
       }
 
       const audioBuffer = await this.audioContext.decodeAudioData(data.audioBuffer);
       const float32Array = audioBuffer.getChannelData(0);
 
-      // If STT is disabled (text mode), play directly through audio context
-      if (!this.state.pipelineConfig.enableSTT) {
+      if (!this.state.features.enableSTT) {
+        // if no STT, play directly on main thread
         const source = this.audioContext.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(this.audioContext.destination);
         source.start();
-
         if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
           this.hasStartedPlayback = true;
           this.eventTracker.addEvent("AudioPlaybackStart");
-          this.config.onEventData?.(this.eventTracker.getData());
+          this.callbacks.onEventData?.(this.eventTracker.getData());
         }
-
         source.onended = () => {
-          // Notify worker that playback ended
           if (this.worker) {
             this.worker.postMessage({ type: "playback_ended" });
           }
-
           if (this.eventTracker.hasActiveTurn()) {
             this.eventTracker.addEvent("AudioPlaybackEnd");
-            this.config.onEventData?.(this.eventTracker.getData());
+            this.callbacks.onEventData?.(this.eventTracker.getData());
           }
         };
       }
-      // If STT enabled (voice mode), send to playback worklet
-      else if (this.state.pipelineConfig.enableSTT && this.playbackNode) {
+
+      // send playback to worklet
+      else if (this.state.features.enableSTT && this.playbackNode) {
         if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
           this.hasStartedPlayback = true;
           this.eventTracker.addEvent("AudioPlaybackStart");
-          this.config.onEventData?.(this.eventTracker.getData());
+          this.callbacks.onEventData?.(this.eventTracker.getData());
         }
-
         this.state.isPlaying = true;
         this.playbackNode.port.postMessage(float32Array);
       }
+      
     } catch (error) {
       console.error('Error decoding MP3:', error);
     }
   }
 
-  private handleSTTStart() {
-    if (this.eventTracker.hasActiveTurn()) {
-      this.eventTracker.addEvent("STTStart");
-      this.config.onEventData?.(this.eventTracker.getData());
-    }
-  }
-
   private handleSTTEnd(data: any) {
-    this.handleTranscription(data.text);
+    if (data.text) {
+      this.callbacks.onMessageReceived?.(
+        "user",
+        data.text,
+        `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      );
+      this.callbacks.onTranscriptionReceived?.(data.text);
+    }
+
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("STTEnd", { text: data.text });
-      this.config.onEventData?.(this.eventTracker.getData());
-    }
-  }
-
-  private handleConversationTurnStart(data: any) {
-    this.state.currentMessageId = null;
-    this.hasStartedPlayback = false;
-    this.startNewTurn();
-    
-    if (data.timestamp && this.config.onConversationStart) {
-      this.config.onConversationStart(data.timestamp);
+      this.callbacks.onEventData?.(this.eventTracker.getData());
     }
   }
 
   private handleSmolLMSubmit(data: any) {
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("LocalLMSubmit", { prompt: data.prompt });
-      this.config.onEventData?.(this.eventTracker.getData());
+      this.callbacks.onEventData?.(this.eventTracker.getData());
     }
   }
 
   private handleSmolLMResponse(data: any) {
     if (data.isInitialResponse) {
       this.state.currentMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-      this.config.onMessageReceived?.(
+      this.callbacks.onMessageReceived?.(
         "assistant",
         data.response || data.content,
         this.state.currentMessageId,
       );
     } else {
       if (this.state.currentMessageId) {
-        this.config.onMessageUpdated?.(
+        this.callbacks.onMessageUpdated?.(
           this.state.currentMessageId,
           data.response,
         );
       } else {
         this.state.currentMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-        this.config.onMessageReceived?.(
+        this.callbacks.onMessageReceived?.(
           "assistant",
           data.response || data.content,
           this.state.currentMessageId,
@@ -334,7 +313,7 @@ export class UnifiedPipeline {
         response: data.rawResponse || data.response || data.content,
         prompt: data.fullPrompt 
       });
-      this.config.onEventData?.(this.eventTracker.getData());
+      this.callbacks.onEventData?.(this.eventTracker.getData());
     }
   }
 
@@ -346,13 +325,8 @@ export class UnifiedPipeline {
         responseIndex: data.responseIndex,
         synthesisId: data.synthesisId
       });
-      this.config.onEventData?.(this.eventTracker.getData());
+      this.callbacks.onEventData?.(this.eventTracker.getData());
     }
-    
-    console.log(`🔊 TTS Synthesis Start: "${data.text}" (Response #${data.responseIndex}, ID: ${data.synthesisId})`, {
-      timestamp: new Date(data.timestamp).toISOString(),
-      turnOffset: data.turnOffset
-    });
   }
 
   private handleTTSSynthesisEnd(data: any) {
@@ -362,29 +336,15 @@ export class UnifiedPipeline {
         responseIndex: data.responseIndex,
         synthesisId: data.synthesisId
       });
-      this.config.onEventData?.(this.eventTracker.getData());
-    }
-  }
-
-  private handleThoughtSubmit(): void {
-    if (this.eventTracker.hasActiveTurn()) {
-      this.eventTracker.addEvent("ThoughtApiSubmit");
-      this.config.onEventData?.(this.eventTracker.getData());
-    }
-  }
-
-  private handleFirstThoughtToken(): void {
-    if (this.eventTracker.hasActiveTurn()) {
-      this.eventTracker.addEvent("ThoughtApiFirstToken");
-      this.config.onEventData?.(this.eventTracker.getData());
+      this.callbacks.onEventData?.(this.eventTracker.getData());
     }
   }
 
   private handleThoughtResponse(data: any): void {
-    this.config.onThoughtReceived?.(data.thought, data.index);
+    this.callbacks.onThoughtReceived?.(data.thought, data.index);
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("ThoughtParsed", { response: data.thought });
-      this.config.onEventData?.(this.eventTracker.getData());
+      this.callbacks.onEventData?.(this.eventTracker.getData());
     }
   }
 
@@ -406,7 +366,7 @@ export class UnifiedPipeline {
         
         if (this.eventTracker.hasActiveTurn()) {
           this.eventTracker.addEvent("AudioPlaybackEnd");
-          this.config.onEventData?.(this.eventTracker.getData());
+          this.callbacks.onEventData?.(this.eventTracker.getData());
         }
         
         if (this.worker) {
@@ -465,16 +425,9 @@ export class UnifiedPipeline {
   }
 
   async processText(text: string) {
-    const config = this.state.pipelineConfig;
+    const config = this.state.features;
 
-    console.log('processText called with config:', {
-      enableTTS: config.enableTTS,
-      enableThoughts: config.enableThoughts,
-      enableSmolLM: config.enableSmolLM
-    });
-
-    // If no SmolLM and no thoughts, use Gemini standalone
-    if (!config.enableSmolLM && !config.enableThoughts) {
+    if (!config.enableSmolLM && config.enableThoughts) {
       return this.processTextWithGeminiStandalone(text);
     }
 
@@ -490,11 +443,11 @@ export class UnifiedPipeline {
     }
 
     const userMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    this.config.onMessageReceived?.("user", text, userMessageId);
+    this.callbacks.onMessageReceived?.("user", text, userMessageId);
 
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("UserInputReceived", { text });
-      this.config.onEventData?.(this.eventTracker.getData());
+      this.callbacks.onEventData?.(this.eventTracker.getData());
     }
 
     this.worker.postMessage({
@@ -515,11 +468,11 @@ export class UnifiedPipeline {
     }
     
     const userMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    this.config.onMessageReceived?.("user", text, userMessageId);
+    this.callbacks.onMessageReceived?.("user", text, userMessageId);
     
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("UserInputReceived", { text });
-      this.config.onEventData?.(this.eventTracker.getData());
+      this.callbacks.onEventData?.(this.eventTracker.getData());
     }
 
     try {
@@ -553,100 +506,65 @@ export class UnifiedPipeline {
         
         if (chunk.includes('[first_token]')) {
           firstToken = true;
-          this.config.onStatusChange?.("processing_complete", "");
+          this.callbacks.onStatusChange?.("processing_complete", "");
           continue;
         }
         
         if (chunk.includes('[done]')) {
-          this.config.onStatusChange?.("response_complete", "");
+          this.callbacks.onStatusChange?.("response_complete", "");
           this.state.isProcessing = false;
           break;
         }
 
         fullResponse += chunk;        
         if (firstToken) {
-          this.config.onMessageReceived?.("assistant", fullResponse, assistantMessageId);
-          this.config.onMessageUpdated?.(assistantMessageId, fullResponse);
+          this.callbacks.onMessageReceived?.("assistant", fullResponse, assistantMessageId);
+          this.callbacks.onMessageUpdated?.(assistantMessageId, fullResponse);
         }
       }
 
     } catch (error) {
       console.error("Error in Gemini-standalone processing:", error);
-      this.config.onStatusChange?.("error", `Failed to process with Gemini: ${error}`);
+      this.callbacks.onStatusChange?.("error", `Failed to process with Gemini: ${error}`);
       this.state.isProcessing = false;
     }
   }
 
-  setVoice(voice: string) {
+  updateFeatures(features: Partial<PipelineState['features']>) {
+    this.state.features = { ...this.state.features, ...features };
     if (this.worker) {
-      this.worker.postMessage({ type: "set_voice", voice });
-    }
-  }
-
-  updatePipelineConfig(config: Partial<PipelineConfig>) {
-    this.state.pipelineConfig = { ...this.state.pipelineConfig, ...config };
-
-    // Update worker with new config
-    if (this.worker) {
-      if (config.enableThoughts !== undefined) {
-        const provider = config.enableThoughts ? "gemini" : "none";
+      if (features.enableThoughts !== undefined) {
+        const provider = features.enableThoughts ? "gemini" : "none";
         this.worker.postMessage({ type: "set_thought_provider", provider });
       }
-      if (config.enableSmolLM !== undefined) {
-        this.worker.postMessage({ type: "set_smollm_enabled", enabled: config.enableSmolLM });
+      if (features.enableSmolLM !== undefined) {
+        this.worker.postMessage({ type: "set_smollm_enabled", enabled: features.enableSmolLM });
       }
-      if (config.enableTTS !== undefined) {
-        this.worker.postMessage({ type: "set_tts_enabled", enabled: config.enableTTS });
+      if (features.enableTTS !== undefined) {
+        this.worker.postMessage({ type: "set_tts_enabled", enabled: features.enableTTS });
       }
-      if (config.enableSTT !== undefined) {
-        this.worker.postMessage({ type: "set_stt_enabled", enabled: config.enableSTT });
+      if (features.enableSTT !== undefined) {
+        this.worker.postMessage({ type: "set_stt_enabled", enabled: features.enableSTT });
       }
     }
   }
 
   async toggleSTT(enable: boolean) {
-    this.state.pipelineConfig.enableSTT = enable;
-
+    this.state.features.enableSTT = enable;
     if (enable && !this.audioContext) {
-      // Set up audio contexts if not already done
       await this.setupAudioContexts();
     } else if (!enable && this.audioContext) {
-      // Clean up audio contexts
       this.disposeAudioContexts();
     }
   }
 
-  toggleThoughts(enable: boolean) {
-    this.updatePipelineConfig({ enableThoughts: enable });
-  }
-
-  toggleSmolLM(enable: boolean) {
-    this.updatePipelineConfig({ enableSmolLM: enable });
-  }
-
-  toggleTTS(enable: boolean) {
-    this.updatePipelineConfig({ enableTTS: enable });
-  }
-
-  getPipelineConfig(): PipelineConfig {
-    return { ...this.state.pipelineConfig };
-  }
-
-  getVoices() {
-    return this.state.voices;
-  }
-
-  private startNewTurn(): void {
+  private startNewTurn() {
     const metadata: TurnMetadata = {
-      localModel: this.state.pipelineConfig.enableSmolLM ? "smollm-finetuned" : "none",
-      thoughtModel: this.state.pipelineConfig.enableThoughts ? "gemini-flash-2.0" : "none",
-      voiceMode: this.state.pipelineConfig.enableSTT
+      localModel: this.state.features.enableSmolLM ? "smollm-finetuned" : "none",
+      thoughtModel: this.state.features.enableThoughts ? "gemini-flash-2.0" : "none",
+      voiceMode: this.state.features.enableSTT
     };
     this.eventTracker.startNewTurn(metadata);
-  }
-
-  getEventData() {
-    return this.eventTracker.getData();
   }
 
   resetEventData() {
@@ -673,22 +591,7 @@ export class UnifiedPipeline {
   }
 
   dispose() {
-    if (this.state.isRecording && this.worker) {
-      this.state.isRecording = false;
-      this.worker.postMessage({ type: "stop_recording" });
-    }
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach((track) => track.stop());
-      this.mediaStream = null;
-    }
-    if (this.worklet) {
-      this.worklet.disconnect();
-      this.worklet = null;
-    }
-    if (this.playbackNode) {
-      this.playbackNode.disconnect();
-      this.playbackNode = null;
-    }
+    this.disposeAudioContexts();
     if (this.audioContext) {
       this.audioContext.close();
       this.audioContext = null;

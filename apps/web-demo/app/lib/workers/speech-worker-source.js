@@ -32,8 +32,6 @@ const availableVoices = {
   "21m00Tcm4TlvDq8ikWAM": { name: "Rachel (Female)" },
 };
 
-console.log('ElevenLabs TTS ready');
-
 // init VAD
 console.log('Initializing VAD');
 const silero_vad = await AutoModel.from_pretrained(
@@ -46,7 +44,6 @@ const silero_vad = await AutoModel.from_pretrained(
   self.postMessage({ error });
   throw error;
 });
-console.log('VAD initialized successfully');
 
 
 // init STT
@@ -61,7 +58,6 @@ const DEVICE_DTYPE_CONFIGS = {
   },
 };
 
-console.log('Initializing TTS.');
 self.postMessage({ 
   type: "info", 
   message: "Loading Whisper TTS...",
@@ -79,13 +75,11 @@ const transcriber = await pipeline(
   throw error;
 });
 await transcriber(new Float32Array(INPUT_SAMPLE_RATE));
-console.log('TTS Initialized.');
 self.postMessage({ 
   type: "info", 
   message: "Whisper model loaded successfully"
 });
 
-console.log('Initializing SmolLM.');
 let llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
 
 // pipeline seemed to have a bug with loading the custom tokenizer
@@ -107,49 +101,15 @@ await llm.generate({
   do_sample: false,
 });
 
-async function switchModel(newModelId) {
-  console.log(`Switching to model: ${newModelId}`);
-  self.postMessage({ 
-    type: "info", 
-    message: `Loading model: ${newModelId}...`,
-    duration: "until_next"
-  });
-  
-  llm_model_id = newModelId;
-  
-  // Load new tokenizer and model
-  tokenizer = await AutoTokenizer.from_pretrained(llm_model_id, {
-    dtype: "fp32",
-    device: "webgpu",
-  });
-  llm = await AutoModelForCausalLM.from_pretrained(llm_model_id, {
-    dtype: "fp32", 
-    device: "webgpu",
-  });
 
-  // Warm up the new model
-  warmupInput = tokenizer(warmupPrompt);
-  await llm.generate({
-    ...warmupInput,
-    max_new_tokens: 10,
-    do_sample: false,
-  });
-  
-  self.postMessage({ 
-    type: "info", 
-    message: `Model ${newModelId} loaded successfully`
-  });
-  console.log(`Model switched to: ${newModelId}`);
-}
 let messages = [];
-let thoughtProvider = "gemini"; // default to Gemini
+let thoughtProvider = "gemini";
 
-// Pipeline configuration state
+// pipeline config
 let currentEnableThoughts = false;
 let currentEnableSmolLM = true;
 let currentEnableTTS = false;
 
-console.log('SmolLM initialized successfully.');
 self.postMessage({
   type: "status",
   status: "ready",
@@ -376,7 +336,6 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
 
   let userText = input;
 
-  // STT: Only transcribe if enableSTT is true and input is audio (Float32Array)
   if (enableSTT && typeof input !== 'string') {
     sttStartTime = Date.now();
     self.postMessage({
@@ -405,20 +364,16 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
   
   messages.push({ role: "user", content: userText });
 
+  // tts pipeline
   let splitter = null;
   let ttsStreamPromise = null;
   if (enableTTS) {
-    splitter = []; // Simple array queue for text chunks
-
+    splitter = [];
     ttsStreamPromise = (async () => {
       try {
-        // Process TTS queue sequentially
         while (true) {
           if (splitter.length === 0) {
-            // Wait a bit for more chunks or completion
             await new Promise(resolve => setTimeout(resolve, 50));
-
-            // If stream is complete and queue is empty, we're done
             if (splitter.closed && splitter.length === 0) {
               break;
             }
@@ -429,7 +384,6 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
           console.log(`Processing TTS chunk:`, chunk);
 
           try {
-            // Call ElevenLabs API
             const response = await fetch('/api/elevenlabs-tts', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -447,7 +401,6 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
             const arrayBuffer = await response.arrayBuffer();
             const chunkEndTime = Date.now();
 
-            // Send synthesis end event
             self.postMessage({
               type: "tts_synthesis_end",
               text: chunk.text,
@@ -459,7 +412,6 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
               startTime: chunk.startTime
             });
 
-            // Send MP3 data to main thread for decoding and playback
             self.postMessage({
               type: "output_mp3",
               text: chunk.text,
@@ -487,7 +439,7 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
   try {
     clearSilenceTimer();
 
-    // Only fetch thoughts if enabled
+    // thoughts pipeline
     if (enableThoughts) {
       thoughtStartTime = Date.now();
       self.postMessage({
@@ -496,10 +448,7 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
         turnOffset: thoughtStartTime - conversationTurnStartTime,
         turnStartTime: conversationTurnStartTime
       });
-
       const thoughtsEndpoint = '/api/chat-thoughts-gemini';
-      console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
-
       thoughtsPromise = fetch(thoughtsEndpoint, {
         method: 'POST',
         headers: {
@@ -510,18 +459,16 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
         }),
       });
     } else if (enableSmolLM) {
-      // If thoughts disabled but SmolLM enabled, generate silence tokens for SmolLM to process
-      console.log('Thoughts disabled, generating silence tokens for SmolLM');
       thoughtsPromise = Promise.resolve().then(async () => {
         streamComplete = true;
-        // Queue 3 silence tokens for SmolLM to process
+        // queue 3 sil tokens if no thoughts
         for (let i = 0; i < 3; i++) {
           thoughtQueue.push("<|sil|>");
         }
       });
     }
 
-    // Only process with SmolLM if enabled
+    // smollm pipeline
     if (enableSmolLM) {
       immediateResponse = await processThought("<|sil|>", userText, [], splitter);
       if (immediateResponse) {
@@ -529,10 +476,8 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
         messages.push({ role: "assistant", content: immediateResponse });
       }
     }
-
     if (thoughtsPromise && enableThoughts) {
       const thoughtsResponse = await thoughtsPromise;
-      
         // sil token handling
         if (!thoughtsResponse.ok) {
           console.warn(`Failed to get thoughts from ${thoughtProvider}`);
@@ -620,7 +565,6 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
         startTime: thoughtStartTime
       });
     } else if (thoughtsPromise && !enableThoughts && enableSmolLM) {
-      // Process silence tokens for SmolLM when thoughts are disabled
       await thoughtsPromise;
       await processThoughtQueue(userText, thoughtResponsePairs, splitter);
       await waitForThoughtQueueComplete();
@@ -629,20 +573,9 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
     console.warn("Failed to generate thoughts:", error);
   }
   
-  // Handle case where neither thoughts nor SmolLM are enabled
-  if (!enableThoughts && !enableSmolLM) {
-    // Just echo the user text as the response (or could call Gemini standalone)
-    const echoResponse = userText;
-    const msgId = Date.now().toString();
-    self.postMessage({
-      type: "message",
-      role: "assistant",
-      content: echoResponse,
-      messageId: msgId
-    });
-    messages.push({ role: "assistant", content: echoResponse });
-  } else if (enableThoughts && !enableSmolLM) {
-    // Thoughts enabled but SmolLM disabled - just return the thoughts directly
+  
+  if (enableThoughts && !enableSmolLM) {
+    // thoughts but no smollm, return thoughts directly
     await waitForThoughtQueueComplete();
     const thoughtsText = thoughtQueue.join(" ");
     const msgId = Date.now().toString();
@@ -664,7 +597,7 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
   
   if (splitter) {
     await new Promise(resolve => setTimeout(resolve, 50));
-    splitter.closed = true; // Mark as closed so TTS promise knows to finish
+    splitter.closed = true;
   }
   
   if (ttsStreamPromise) {
@@ -704,7 +637,6 @@ const dispatchForTranscriptionAndResetAudioBuffer = (overflow) => {
     offset += prev.length;
   }
   paddedBuffer.set(buffer, offset);
-  // For voice input, STT is always enabled (true), use current config for thoughts/SmolLM/TTS
   processInput(paddedBuffer, true, currentEnableThoughts, currentEnableSmolLM, currentEnableTTS);
 
   // set overflow (if present) and reset the rest of the audio buffer
@@ -743,23 +675,18 @@ self.onmessage = async (event) => {
     case "set_thought_provider":
       thoughtProvider = event.data.provider;
       currentEnableThoughts = (thoughtProvider !== "none");
-      console.log(`Thought provider set to: ${thoughtProvider}, enableThoughts: ${currentEnableThoughts}`);
       return;
 
     case "set_smollm_enabled":
       currentEnableSmolLM = event.data.enabled;
-      console.log(`SmolLM enabled set to: ${currentEnableSmolLM}`);
       return;
 
     case "set_tts_enabled":
       currentEnableTTS = event.data.enabled;
-      console.log(`TTS enabled set to: ${currentEnableTTS}`);
       return;
 
     case "set_stt_enabled":
-      // STT state is managed by audio context setup/teardown in main thread
-      console.log(`STT enabled set to: ${event.data.enabled}`);
-      return;
+      return; // managed by main thread now
       
     case "playback_ended":
       isPlaying = false;
@@ -773,12 +700,10 @@ self.onmessage = async (event) => {
       const enableThoughts = event.data.enableThoughts !== undefined ? event.data.enableThoughts : true;
       const enableSmolLM = event.data.enableSmolLM !== undefined ? event.data.enableSmolLM : true;
 
-      // Update current config state for voice input path to use
       currentEnableThoughts = enableThoughts;
       currentEnableSmolLM = enableSmolLM;
       currentEnableTTS = enableTTS;
 
-      console.log('Worker received process_text with:', { enableTTS, enableThoughts, enableSmolLM });
       if (text) {
         await processInput(text, false, enableThoughts, enableSmolLM, enableTTS);
       }

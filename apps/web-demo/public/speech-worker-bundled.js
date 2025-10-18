@@ -46793,14 +46793,12 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
         type: "info",
         message: `Model ${newModelId} loaded successfully`
       });
-      console.log(`Model switched to: ${newModelId}`);
     }
     let messages = [];
     let thoughtProvider = "gemini";
     let currentEnableThoughts = false;
     let currentEnableSmolLM = true;
     let currentEnableTTS = false;
-    console.log("SmolLM initialized successfully.");
     self.postMessage({
       type: "status",
       status: "ready",
@@ -47101,14 +47099,6 @@ ${thought}<|im_end|>
             body: JSON.stringify({
               messages
             })
-          });
-        } else if (enableSmolLM) {
-          console.log("Thoughts disabled, generating silence tokens for SmolLM");
-          thoughtsPromise = Promise.resolve().then(async () => {
-            streamComplete = true;
-            for (let i = 0; i < 3; i++) {
-              thoughtQueue.push("<|sil|>");
-            }
           });
         }
         if (enableSmolLM) {

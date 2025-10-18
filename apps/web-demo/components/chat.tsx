@@ -4,7 +4,7 @@ import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
 import { Bot, User, Loader2, Send, Eye, EyeOff } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
-import { UnifiedPipeline, PipelineConfig } from "../app/lib/unified-pipeline";
+import { UnifiedPipeline, PipelineState } from "../app/lib/unified-pipeline";
 import { Timeline } from "./timeline";
 import { PipelineControls } from "./pipeline-controls";
 import { StatsPanel } from "./stats-panel";
@@ -133,7 +133,7 @@ export function Chat({
 
       setModelLoadingProgress("Loading models...");
 
-      const pipelineConfig: PipelineConfig = {
+      const pipelineFeatures: PipelineState['features'] = {
         enableSTT,
         enableThoughts,
         enableSmolLM,
@@ -218,7 +218,7 @@ export function Chat({
         onConversationStart: (startTime: number) => {
           setConversationStartTime(startTime);
         },
-      }, pipelineConfig);
+      }, pipelineFeatures);
 
       try {
         await pipelineRef.current.initialize();
@@ -252,21 +252,21 @@ export function Chat({
   const handleToggleThoughts = (enabled: boolean) => {
     setEnableThoughts(enabled);
     if (pipelineRef.current) {
-      pipelineRef.current.toggleThoughts(enabled);
+      pipelineRef.current.updateFeatures({ enableThoughts: enabled });
     }
   };
 
   const handleToggleSmolLM = (enabled: boolean) => {
     setEnableSmolLM(enabled);
     if (pipelineRef.current) {
-      pipelineRef.current.toggleSmolLM(enabled);
+      pipelineRef.current.updateFeatures({ enableSmolLM: enabled });
     }
   };
 
   const handleToggleTTS = (enabled: boolean) => {
     setEnableTTS(enabled);
     if (pipelineRef.current) {
-      pipelineRef.current.toggleTTS(enabled);
+      pipelineRef.current.updateFeatures({ enableTTS: enabled });
     }
   };
 
