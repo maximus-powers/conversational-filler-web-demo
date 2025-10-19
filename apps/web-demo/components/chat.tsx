@@ -240,6 +240,7 @@ export function Chat({
         pipelineRef.current.dispose();
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleToggleSTT = async (enabled: boolean) => {
