@@ -46704,7 +46704,6 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
     const availableVoices = {
       "21m00Tcm4TlvDq8ikWAM": { name: "Rachel (Female)" }
     };
-    console.log("ElevenLabs TTS ready");
     console.log("Initializing VAD");
     const silero_vad = await __webpack_exports__AutoModel.from_pretrained(
       "onnx-community/silero-vad",
@@ -46716,7 +46715,6 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
       self.postMessage({ error });
       throw error;
     });
-    console.log("VAD initialized successfully");
     const DEVICE_DTYPE_CONFIGS = {
       webgpu: {
         encoder_model: "fp32",
@@ -46727,7 +46725,6 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
         decoder_model_merged: "q8"
       }
     };
-    console.log("Initializing TTS.");
     self.postMessage({
       type: "info",
       message: "Loading Whisper TTS...",
@@ -46745,12 +46742,10 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
       throw error;
     });
     await transcriber(new Float32Array(INPUT_SAMPLE_RATE));
-    console.log("TTS Initialized.");
     self.postMessage({
       type: "info",
       message: "Whisper model loaded successfully"
     });
-    console.log("Initializing SmolLM.");
     let llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
     let tokenizer = await __webpack_exports__AutoTokenizer.from_pretrained(llm_model_id, {
       dtype: "fp32",
@@ -46767,33 +46762,6 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
       max_new_tokens: 10,
       do_sample: false
     });
-    async function switchModel(newModelId) {
-      console.log(`Switching to model: ${newModelId}`);
-      self.postMessage({
-        type: "info",
-        message: `Loading model: ${newModelId}...`,
-        duration: "until_next"
-      });
-      llm_model_id = newModelId;
-      tokenizer = await __webpack_exports__AutoTokenizer.from_pretrained(llm_model_id, {
-        dtype: "fp32",
-        device: "webgpu"
-      });
-      llm = await __webpack_exports__AutoModelForCausalLM.from_pretrained(llm_model_id, {
-        dtype: "fp32",
-        device: "webgpu"
-      });
-      warmupInput = tokenizer(warmupPrompt);
-      await llm.generate({
-        ...warmupInput,
-        max_new_tokens: 10,
-        do_sample: false
-      });
-      self.postMessage({
-        type: "info",
-        message: `Model ${newModelId} loaded successfully`
-      });
-    }
     let messages = [];
     let thoughtProvider = "gemini";
     let currentEnableThoughts = false;
@@ -47090,7 +47058,6 @@ ${thought}<|im_end|>
             turnStartTime: conversationTurnStartTime
           });
           const thoughtsEndpoint = "/api/chat-thoughts-gemini";
-          console.log(`Fetching thoughts from ${thoughtProvider} using ${thoughtsEndpoint}`);
           thoughtsPromise = fetch(thoughtsEndpoint, {
             method: "POST",
             headers: {
@@ -47099,6 +47066,13 @@ ${thought}<|im_end|>
             body: JSON.stringify({
               messages
             })
+          });
+        } else if (enableSmolLM) {
+          thoughtsPromise = Promise.resolve().then(async () => {
+            streamComplete = true;
+            for (let i = 0; i < 3; i++) {
+              thoughtQueue.push("<|sil|>");
+            }
           });
         }
         if (enableSmolLM) {
@@ -47192,17 +47166,7 @@ ${thought}<|im_end|>
       } catch (error) {
         console.warn("Failed to generate thoughts:", error);
       }
-      if (!enableThoughts && !enableSmolLM) {
-        const echoResponse = userText;
-        const msgId = Date.now().toString();
-        self.postMessage({
-          type: "message",
-          role: "assistant",
-          content: echoResponse,
-          messageId: msgId
-        });
-        messages.push({ role: "assistant", content: echoResponse });
-      } else if (enableThoughts && !enableSmolLM) {
+      if (enableThoughts && !enableSmolLM) {
         await waitForThoughtQueueComplete();
         const thoughtsText = thoughtQueue.join(" ");
         const msgId = Date.now().toString();
@@ -47278,19 +47242,16 @@ ${thought}<|im_end|>
         case "set_thought_provider":
           thoughtProvider = event.data.provider;
           currentEnableThoughts = thoughtProvider !== "none";
-          console.log(`Thought provider set to: ${thoughtProvider}, enableThoughts: ${currentEnableThoughts}`);
           return;
         case "set_smollm_enabled":
           currentEnableSmolLM = event.data.enabled;
-          console.log(`SmolLM enabled set to: ${currentEnableSmolLM}`);
           return;
         case "set_tts_enabled":
           currentEnableTTS = event.data.enabled;
-          console.log(`TTS enabled set to: ${currentEnableTTS}`);
           return;
         case "set_stt_enabled":
-          console.log(`STT enabled set to: ${event.data.enabled}`);
           return;
+        // managed by main thread now
         case "playback_ended":
           isPlaying = false;
           clearSilenceTimer();
@@ -47303,7 +47264,6 @@ ${thought}<|im_end|>
           currentEnableThoughts = enableThoughts;
           currentEnableSmolLM = enableSmolLM;
           currentEnableTTS = enableTTS;
-          console.log("Worker received process_text with:", { enableTTS, enableThoughts, enableSmolLM });
           if (text) {
             await processInput(text, false, enableThoughts, enableSmolLM, enableTTS);
           }

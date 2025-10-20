@@ -17,7 +17,7 @@ export function Tooltip({ content, children, className = "", preserveChildPositi
   const handleMouseEnter = (e: React.MouseEvent) => {
     setPosition({
       x: e.clientX,
-      y: e.clientY - 10,
+      y: e.clientY + 10,
     });
     setIsVisible(true);
   };
@@ -26,7 +26,7 @@ export function Tooltip({ content, children, className = "", preserveChildPositi
     if (isVisible) {
       setPosition({
         x: e.clientX,
-        y: e.clientY - 10,
+        y: e.clientY + 10,
       });
     }
   };
@@ -53,19 +53,19 @@ export function Tooltip({ content, children, className = "", preserveChildPositi
           style={{
             left: position.x,
             top: position.y,
-            transform: 'translate(-50%, -100%)',
+            transform: 'translate(-50%, 0%)',
           }}
         >
           {content}
           {/* Arrow */}
           <div
-            className="absolute top-full left-1/2 transform -translate-x-1/2"
+            className="absolute bottom-full left-1/2 transform -translate-x-1/2"
             style={{
               width: 0,
               height: 0,
               borderLeft: '4px solid transparent',
               borderRight: '4px solid transparent',
-              borderTop: '4px solid hsl(var(--muted))',
+              borderBottom: '4px solid hsl(var(--muted))',
             }}
           />
         </div>
