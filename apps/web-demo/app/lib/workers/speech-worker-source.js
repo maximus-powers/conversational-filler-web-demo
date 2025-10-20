@@ -104,6 +104,7 @@ await llm.generate({
 
 let messages = [];
 let thoughtProvider = "gemini";
+let currentMessageId = null;
 
 // pipeline config
 let currentEnableThoughts = false;
@@ -318,6 +319,7 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
   responseIndex = 0;
   ttsSynthesisId = 0;
   pendingSynthesisEvents.clear();
+  currentMessageId = null;
 
   conversationStartTime = Date.now();
   conversationTurnStartTime = conversationStartTime;
@@ -593,6 +595,14 @@ const processInput = async (input, enableSTT, enableThoughts, enableSmolLM, enab
     if (fullResponse !== immediateResponse) {
       messages[messages.length - 1].content = fullResponse;
     }
+
+    if (thoughtResponsePairs.length > 0 && currentMessageId) {
+      self.postMessage({
+        type: "thought_response_pairs",
+        pairs: thoughtResponsePairs,
+        messageId: currentMessageId
+      });
+    }
   }
   
   if (splitter) {
@@ -687,10 +697,14 @@ self.onmessage = async (event) => {
 
     case "set_stt_enabled":
       return; // managed by main thread now
-      
+
+    case "set_current_message_id":
+      currentMessageId = event.data.messageId;
+      return;
+
     case "playback_ended":
       isPlaying = false;
-      clearSilenceTimer(); 
+      clearSilenceTimer();
       return;
       
     case "process_text":

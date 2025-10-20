@@ -17,6 +17,7 @@ interface Message {
   content: string;
   processedContent?: string;
   thoughts?: string[];
+  thoughtResponsePairs?: Array<{thought: string, response: string}>;
 }
 
 type ModelConfig = {
@@ -63,6 +64,7 @@ export function Chat({
   const [conversationId] = useState<string>(() => crypto.randomUUID());
   const [showTimeline, setShowTimeline] = useState(false);
   const [showStatsPanel, setShowStatsPanel] = useState(!feedbackMode);
+  const [showThoughts, setShowThoughts] = useState(false);
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -76,6 +78,47 @@ export function Chat({
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  const renderMessageWithThoughts = (message: Message) => {
+    if (!showThoughts || !message.thoughtResponsePairs || message.thoughtResponsePairs.length === 0) {
+      return message.processedContent || message.content;
+    }
+
+    const pairs = message.thoughtResponsePairs;
+    const elements: React.ReactNode[] = [];
+
+    pairs.forEach((pair, index) => {
+      if (pair.thought === "<|sil|>") {
+        elements.push(
+          <span key={`response-${index}`}>
+            {pair.response}
+            {index < pairs.length - 1 ? " " : ""}
+          </span>
+        );
+      } else {
+        elements.push(
+          <span
+            key={`thought-${index}`}
+            className="bg-muted-foreground text-black px-1 mr-1 rounded"
+          >
+            {pair.thought}
+            <span key={`arrow-${index}`} className="text-black pl-1">→</span>
+          </span>
+        );
+
+        elements.push(
+          <span key={`response-${index}`}>
+            {pair.response}
+          </span>
+        );
+        if (index < pairs.length - 1) {
+          elements.push(<span key={`space-${index}`}> </span>);
+        }
+      }
+    });
+
+    return <>{elements}</>;
+  };
 
   const clearEventData = () => {
     setEventData(null);
@@ -217,6 +260,24 @@ export function Chat({
 
         onConversationStart: (startTime: number) => {
           setConversationStartTime(startTime);
+        },
+
+        onThoughtResponsePairs: (pairs, messageId) => {
+          console.log('Chat received thought-response pairs:', pairs.length, 'for message:', messageId);
+          setMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id === messageId) {
+                console.log('Updating message with thought pairs:', msg.id);
+                const updatedMessage = {
+                  ...msg,
+                  thoughtResponsePairs: pairs,
+                };
+                messagesRef.current.set(messageId, updatedMessage);
+                return updatedMessage;
+              }
+              return msg;
+            }),
+          );
         },
       }, pipelineFeatures);
 
@@ -393,6 +454,16 @@ export function Chat({
                 </Button>
 
                 <Button
+                  onClick={() => setShowThoughts(!showThoughts)}
+                  variant="outline"
+                  size="sm"
+                  className="flex items-center gap-1"
+                >
+                  {showThoughts ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                  Show Thoughts
+                </Button>
+
+                <Button
                   onClick={clearChat}
                   size="sm"
                   disabled={messages.length === 0}
@@ -467,7 +538,7 @@ export function Chat({
                     }`}
                   >
                     <p className="text-sm whitespace-pre-wrap">
-                      {message.processedContent || message.content}
+                      {renderMessageWithThoughts(message)}
                     </p>
                   </div>
                 </div>

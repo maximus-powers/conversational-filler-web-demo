@@ -9,6 +9,7 @@ export interface PipelineCallbacks {
   ) => void;
   onMessageUpdated?: (messageId: string, content: string) => void;
   onThoughtReceived?: (thought: string, index: number) => void;
+  onThoughtResponsePairs?: (pairs: Array<{thought: string, response: string}>, messageId: string) => void;
   onTranscriptionReceived?: (text: string) => void;
   onStatusChange?: (status: string, message: string) => void;
   onEventData?: (eventData: any) => void;
@@ -172,6 +173,9 @@ export class UnifiedPipeline {
         case "thought_response":
           this.handleThoughtResponse(data);
           break;
+        case "thought_response_pairs":
+          this.handleThoughtResponsePairs(data);
+          break;
       }
     };
   }
@@ -285,6 +289,8 @@ export class UnifiedPipeline {
   }
 
   private handleSmolLMResponse(data: any) {
+    let shouldSendMessageId = false;
+
     if (data.isInitialResponse) {
       this.state.currentMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
       this.callbacks.onMessageReceived?.(
@@ -292,6 +298,7 @@ export class UnifiedPipeline {
         data.response || data.content,
         this.state.currentMessageId,
       );
+      shouldSendMessageId = true;
     } else {
       if (this.state.currentMessageId) {
         this.callbacks.onMessageUpdated?.(
@@ -305,15 +312,23 @@ export class UnifiedPipeline {
           data.response || data.content,
           this.state.currentMessageId,
         );
+        shouldSendMessageId = true;
       }
     }
-    
+
     if (this.eventTracker.hasActiveTurn()) {
-      this.eventTracker.addEvent("LocalLMResponse", { 
+      this.eventTracker.addEvent("LocalLMResponse", {
         response: data.rawResponse || data.response || data.content,
-        prompt: data.fullPrompt 
+        prompt: data.fullPrompt
       });
       this.callbacks.onEventData?.(this.eventTracker.getData());
+    }
+
+    if (this.worker && this.state.currentMessageId && shouldSendMessageId) {
+      this.worker.postMessage({
+        type: "set_current_message_id",
+        messageId: this.state.currentMessageId
+      });
     }
   }
 
@@ -345,6 +360,12 @@ export class UnifiedPipeline {
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("ThoughtParsed", { response: data.thought });
       this.callbacks.onEventData?.(this.eventTracker.getData());
+    }
+  }
+
+  private handleThoughtResponsePairs(data: any): void {
+    if (data.pairs && data.messageId) {
+      this.callbacks.onThoughtResponsePairs?.(data.pairs, data.messageId);
     }
   }
 

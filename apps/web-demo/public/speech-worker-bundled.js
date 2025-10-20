@@ -46764,6 +46764,7 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
     });
     let messages = [];
     let thoughtProvider = "gemini";
+    let currentMessageId = null;
     let currentEnableThoughts = false;
     let currentEnableSmolLM = true;
     let currentEnableTTS = false;
@@ -46948,6 +46949,7 @@ ${thought}<|im_end|>
       responseIndex = 0;
       ttsSynthesisId = 0;
       pendingSynthesisEvents.clear();
+      currentMessageId = null;
       conversationStartTime = Date.now();
       conversationTurnStartTime = conversationStartTime;
       inferenceStartTime = null;
@@ -47183,6 +47185,13 @@ ${thought}<|im_end|>
         if (fullResponse !== immediateResponse) {
           messages[messages.length - 1].content = fullResponse;
         }
+        if (thoughtResponsePairs.length > 0 && currentMessageId) {
+          self.postMessage({
+            type: "thought_response_pairs",
+            pairs: thoughtResponsePairs,
+            messageId: currentMessageId
+          });
+        }
       }
       if (splitter) {
         await new Promise((resolve) => setTimeout(resolve, 50));
@@ -47252,6 +47261,9 @@ ${thought}<|im_end|>
         case "set_stt_enabled":
           return;
         // managed by main thread now
+        case "set_current_message_id":
+          currentMessageId = event.data.messageId;
+          return;
         case "playback_ended":
           isPlaying = false;
           clearSilenceTimer();
