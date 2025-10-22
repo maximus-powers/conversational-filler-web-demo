@@ -59,6 +59,7 @@ export function Chat({
   const [enableThoughts, setEnableThoughts] = useState(config?.thoughtModel !== "none");
   const [enableSmolLM, setEnableSmolLM] = useState(config?.localModel !== null);
   const [enableTTS, setEnableTTS] = useState(false);
+  const [persona, setPersona] = useState("none");
   const [isListening, setIsListening] = useState(false);
 
   const [conversationId] = useState<string>(() => crypto.randomUUID());
@@ -181,6 +182,7 @@ export function Chat({
         enableThoughts,
         enableSmolLM,
         enableTTS,
+        persona,
       };
 
       pipelineRef.current = new UnifiedPipeline({
@@ -332,6 +334,13 @@ export function Chat({
     }
   };
 
+  const handlePersonaChange = (newPersona: string) => {
+    setPersona(newPersona);
+    if (pipelineRef.current) {
+      pipelineRef.current.updateFeatures({ persona: newPersona });
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || modelLoading || disabled)
@@ -417,10 +426,12 @@ export function Chat({
                   enableThoughts={enableThoughts}
                   enableSmolLM={enableSmolLM}
                   enableTTS={enableTTS}
+                  persona={persona}
                   onToggleSTT={handleToggleSTT}
                   onToggleThoughts={handleToggleThoughts}
                   onToggleSmolLM={handleToggleSmolLM}
                   onToggleTTS={handleToggleTTS}
+                  onPersonaChange={handlePersonaChange}
                   disabled={modelLoading || isLoading}
                 />
 

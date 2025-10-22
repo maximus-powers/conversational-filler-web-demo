@@ -46765,6 +46765,7 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
     let messages = [];
     let thoughtProvider = "gemini";
     let currentMessageId = null;
+    let currentPersona = "none";
     let currentEnableThoughts = false;
     let currentEnableSmolLM = true;
     let currentEnableTTS = false;
@@ -47059,7 +47060,8 @@ ${thought}<|im_end|>
             turnOffset: thoughtStartTime - conversationTurnStartTime,
             turnStartTime: conversationTurnStartTime
           });
-          const thoughtsEndpoint = "/api/chat-thoughts-gemini";
+          const personaParam = currentPersona !== "none" ? `?persona=${currentPersona}` : "";
+          const thoughtsEndpoint = `/api/chat-thoughts-gemini${personaParam}`;
           thoughtsPromise = fetch(thoughtsEndpoint, {
             method: "POST",
             headers: {
@@ -47257,6 +47259,9 @@ ${thought}<|im_end|>
           return;
         case "set_tts_enabled":
           currentEnableTTS = event.data.enabled;
+          return;
+        case "set_persona":
+          currentPersona = event.data.persona;
           return;
         case "set_stt_enabled":
           return;

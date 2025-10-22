@@ -22,6 +22,7 @@ export interface PipelineState {
     enableThoughts: boolean;
     enableSmolLM: boolean;
     enableTTS: boolean;
+    persona: string;
   };
   isReady: boolean;
   isProcessing: boolean;
@@ -51,6 +52,7 @@ export class UnifiedPipeline {
         enableThoughts: true,
         enableSmolLM: true,
         enableTTS: false,
+        persona: "none",
       },
       isReady: false,
       isProcessing: false,
@@ -96,6 +98,7 @@ export class UnifiedPipeline {
         this.worker.postMessage({ type: "set_thought_provider", provider });
         this.worker.postMessage({ type: "set_smollm_enabled", enabled: features.enableSmolLM });
         this.worker.postMessage({ type: "set_tts_enabled", enabled: features.enableTTS });
+        this.worker.postMessage({ type: "set_persona", persona: features.persona });
       }
 
       this.state.isReady = true;
@@ -566,6 +569,9 @@ export class UnifiedPipeline {
       }
       if (features.enableSTT !== undefined) {
         this.worker.postMessage({ type: "set_stt_enabled", enabled: features.enableSTT });
+      }
+      if (features.persona !== undefined) {
+        this.worker.postMessage({ type: "set_persona", persona: features.persona });
       }
     }
   }

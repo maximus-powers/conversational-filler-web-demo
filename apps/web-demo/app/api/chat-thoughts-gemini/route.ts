@@ -1,9 +1,21 @@
 import { streamText } from "ai";
 import { google } from "@ai-sdk/google";
 
+const PERSONAS: Record<string, string> = {
+  educator: "You are an educator who explains concepts clearly and encourages learning.",
+  customer_service: "You are a customer service agent focused on solving problems and being helpful.",
+  event_planner: "You are an event planner who thinks about logistics, timing, and coordinating details.",
+  medical: "You are a medical professional who provides thoughtful, empathetic health guidance.",
+  coach: "You are a coach and advice counselor who motivates and provides supportive guidance.",
+};
+
 export async function POST(req: Request) {
   try {
     const { messages } = await req.json();
+    const url = new URL(req.url);
+    const personaKey = url.searchParams.get("persona");
+    const personaDescription = personaKey && PERSONAS[personaKey] ? PERSONAS[personaKey] : null;
+
     const conversationLines = [];
     for (const msg of messages) {
       if (msg.role === "user") {
@@ -24,7 +36,7 @@ export async function POST(req: Request) {
       messages: [
         {
           role: "system",
-          content: `Your job is to take the previous turns of the conversation and respond with distinct thoughts that could answer, separated by [bt], begin thought, and [et], end thought. The thoughts should be as short as possible while preserving meaning. Output only the spans of [bt] and [et].
+          content: `${personaDescription ? personaDescription + "\n\n" : ""}Your job is to take the previous turns of the conversation and respond with distinct thoughts that could answer, separated by [bt], begin thought, and [et], end thought. The thoughts should be as short as possible while preserving meaning. Output only the spans of [bt] and [et].
 First think of a good response, then summarize it. Be concise. Be proactive sometimes. Stay on topic.
 
 Your distinct thoughts should be as if they were human thoughts, short, not full sentences but conveying the point of how you would continue an engaging conversation.
