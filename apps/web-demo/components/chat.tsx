@@ -2,12 +2,13 @@
 
 import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
-import { Bot, User, Loader2, Send, Eye, EyeOff } from "lucide-react";
+import { Loader2, Send, Eye, EyeOff } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
 import { UnifiedPipeline, PipelineState } from "../app/lib/unified-pipeline";
 import { Timeline } from "./timeline";
 import { PipelineControls } from "./pipeline-controls";
 import { StatsPanel } from "./stats-panel";
+import { MessageList } from "./message-list";
 import { EventData } from "../app/lib/event-tracker";
 import { saveConversation } from "../app/lib/utils/utils";
 
@@ -66,60 +67,15 @@ export function Chat({
   const [showTimeline, setShowTimeline] = useState(false);
   const [showStatsPanel, setShowStatsPanel] = useState(!feedbackMode);
   const [showThoughts, setShowThoughts] = useState(false);
+  const [showSideBySide, setShowSideBySide] = useState(false);
+  const [comparisonMessages, setComparisonMessages] = useState<Message[]>([]);
+  const [isComparisonLoading, setIsComparisonLoading] = useState(false);
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const currentUserPromptRef = useRef<string>("");
   const eventDataRef = useRef<EventData | null>(null);
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const renderMessageWithThoughts = (message: Message) => {
-    if (!showThoughts || !message.thoughtResponsePairs || message.thoughtResponsePairs.length === 0) {
-      return message.processedContent || message.content;
-    }
-
-    const pairs = message.thoughtResponsePairs;
-    const elements: React.ReactNode[] = [];
-
-    pairs.forEach((pair, index) => {
-      if (pair.thought === "<|sil|>") {
-        elements.push(
-          <span key={`response-${index}`}>
-            {pair.response}
-            {index < pairs.length - 1 ? " " : ""}
-          </span>
-        );
-      } else {
-        elements.push(
-          <span
-            key={`thought-${index}`}
-            className="bg-muted-foreground text-black px-1 mr-1 rounded"
-          >
-            {pair.thought}
-            <span key={`arrow-${index}`} className="text-black pl-1">→</span>
-          </span>
-        );
-
-        elements.push(
-          <span key={`response-${index}`}>
-            {pair.response}
-          </span>
-        );
-        if (index < pairs.length - 1) {
-          elements.push(<span key={`space-${index}`}> </span>);
-        }
-      }
-    });
-
-    return <>{elements}</>;
-  };
+  const pendingGeminiInputRef = useRef<string | null>(null);
+  const comparisonMessagesRef = useRef<Message[]>([]);
 
   const clearEventData = () => {
     setEventData(null);
@@ -265,11 +221,9 @@ export function Chat({
         },
 
         onThoughtResponsePairs: (pairs, messageId) => {
-          console.log('Chat received thought-response pairs:', pairs.length, 'for message:', messageId);
           setMessages((prev) =>
             prev.map((msg) => {
               if (msg.id === messageId) {
-                console.log('Updating message with thought pairs:', msg.id);
                 const updatedMessage = {
                   ...msg,
                   thoughtResponsePairs: pairs,
@@ -280,6 +234,12 @@ export function Chat({
               return msg;
             }),
           );
+
+          // comparison waiting until after convfill done
+          if (pendingGeminiInputRef.current) {
+            fetchGeminiComparison(pendingGeminiInputRef.current);
+            pendingGeminiInputRef.current = null;
+          }
         },
       }, pipelineFeatures);
 
@@ -341,6 +301,80 @@ export function Chat({
     }
   };
 
+  const fetchGeminiComparison = async (userInput: string) => {
+    setIsComparisonLoading(true);
+    const userMessageId = `comparison-${Date.now()}`;
+    const userMessage: Message = {
+      id: userMessageId,
+      role: "user",
+      content: userInput,
+      processedContent: userInput,
+    };
+
+    const updatedMessages = [...comparisonMessagesRef.current, userMessage]; // store comparison messages in ref too for consistency
+    comparisonMessagesRef.current = updatedMessages;
+    setComparisonMessages(updatedMessages);
+
+    try {
+      const personaParam = persona !== "none" ? `?persona=${persona}` : '';
+      const response = await fetch(`/api/gemini-standalone${personaParam}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: updatedMessages.map(m => ({
+            role: m.role,
+            content: m.content
+          }))
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.statusText}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body');
+      }
+
+      const assistantMessageId = `comparison-${Date.now()}-assistant`;
+      let fullResponse = "";
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        fullResponse += chunk;
+
+        setComparisonMessages(prev => {
+          const existing = prev.find(m => m.id === assistantMessageId);
+          let updated;
+          if (existing) {
+            updated = prev.map(m => m.id === assistantMessageId ? { ...m, content: fullResponse, processedContent: fullResponse } : m);
+          } else {
+            updated = [...prev, {
+              id: assistantMessageId,
+              role: "assistant" as const,
+              content: fullResponse,
+              processedContent: fullResponse,
+            }];
+          }
+          comparisonMessagesRef.current = updated;
+          return updated;
+        });
+      }
+
+      setIsComparisonLoading(false);
+    } catch (error) {
+      console.error("Gemini comparison error:", error);
+      setIsComparisonLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || modelLoading || disabled)
@@ -349,10 +383,13 @@ export function Chat({
     const currentInput = input;
     setInput("");
     setIsLoading(true);
-    
+
     setCurrentUserPrompt(currentInput);
     currentUserPromptRef.current = currentInput;
 
+    if (showSideBySide) {
+      pendingGeminiInputRef.current = currentInput;
+    }
 
     try {
       if (pipelineRef.current) {
@@ -367,20 +404,20 @@ export function Chat({
           processedContent: currentInput,
         };
         setMessages(prev => [...prev, userMessage]);
-        
+
         setTimeout(() => {
           const aiMessageId = (Date.now() + 1).toString();
           const aiMessage: Message = {
             id: aiMessageId,
-            role: "assistant", 
+            role: "assistant",
             content: "This is a fallback response since the AI pipeline is not available.",
             processedContent: "This is a fallback response since the AI pipeline is not available.",
           };
           setMessages(prev => [...prev, aiMessage]);
           messagesRef.current.set(aiMessageId, aiMessage);
-          
+
           setIsLoading(false);
-          
+
           setCurrentAssistantMessageId(aiMessageId);
           scheduleResponseComplete(aiMessageId, currentUserPromptRef.current);
         }, 1000);
@@ -394,9 +431,13 @@ export function Chat({
 
   const clearChat = () => {
     setMessages([]);
+    setComparisonMessages([]);
+    comparisonMessagesRef.current = [];
     messagesRef.current.clear();
     clearEventData();
     setIsLoading(false);
+    setIsComparisonLoading(false);
+    pendingGeminiInputRef.current = null;
     if (responseCompleteTimeout) {
       clearTimeout(responseCompleteTimeout);
       setResponseCompleteTimeout(null);
@@ -475,6 +516,16 @@ export function Chat({
                 </Button>
 
                 <Button
+                  onClick={() => setShowSideBySide(!showSideBySide)}
+                  variant="outline"
+                  size="sm"
+                  className="flex items-center gap-1"
+                >
+                  {showSideBySide ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                  Side by Side
+                </Button>
+
+                <Button
                   onClick={clearChat}
                   size="sm"
                   disabled={messages.length === 0}
@@ -498,79 +549,37 @@ export function Chat({
         )}
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 bg-background">
-          {messages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground">
-              <Bot className="h-16 w-16 mb-4 opacity-20" />
-              <h2 className="text-xl font-medium mb-2">
-                Welcome to the Conversational Filler
-              </h2>
-              <p className="text-sm max-w-md">
-                {enableSTT
-                  ? "Just start speaking! I'm listening and will respond."
-                  : "Type a message below to start chatting."}
-              </p>
-              {modelLoading && (
-                <div className="mt-6">
-                  <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-                  <p className="text-xs">{modelLoadingProgress}</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          <div className="space-y-4">
-            {messages.map((message) => (
-              <div
-                key={message.id}
-                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`flex gap-3 max-w-[70%] ${message.role === "user" ? "flex-row-reverse" : ""}`}
-                >
-                  <div
-                    className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
-                      message.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted"
-                    }`}
-                  >
-                    {message.role === "user" ? (
-                      <User className="h-4 w-4" />
-                    ) : (
-                      <Bot className="h-4 w-4" />
-                    )}
-                  </div>
-                  <div
-                    className={`px-4 py-2 rounded-lg ${
-                      message.role === "user"
-                        ? "bg-primary text-primary-foreground"
-                        : "bg-muted"
-                    }`}
-                  >
-                    <p className="text-sm whitespace-pre-wrap">
-                      {renderMessageWithThoughts(message)}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {isLoading && (
-              <div className="flex justify-start">
-                <div className="flex gap-3 max-w-[70%]">
-                  <div className="flex-shrink-0 w-8 h-8 rounded-full bg-muted flex items-center justify-center">
-                    <Bot className="h-4 w-4" />
-                  </div>
-                  <div className="px-4 py-2 rounded-lg bg-muted">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  </div>
-                </div>
-              </div>
-            )}
+        <div className="flex-1 flex overflow-hidden">
+          {/* ConvFill Side */}
+          <div className={`flex-1 flex flex-col ${showSideBySide ? "border-r" : ""}`}>
+            <MessageList
+              messages={messages}
+              isLoading={isLoading}
+              showThoughts={showThoughts}
+              title={showSideBySide ? "ConvFill" : undefined}
+              isEmpty={messages.length === 0}
+              emptyMessage={enableSTT
+                ? "Just start speaking! I'm listening and will respond."
+                : "Type a message below to start chatting."}
+              showWelcome={!showSideBySide}
+              modelLoading={modelLoading}
+              modelLoadingProgress={modelLoadingProgress}
+            />
           </div>
 
-          <div ref={messagesEndRef} />
+          {/* Gemini Side */}
+          {showSideBySide && (
+            <div className="flex-1 flex flex-col">
+              <MessageList
+                messages={comparisonMessages}
+                isLoading={isComparisonLoading}
+                showThoughts={false}
+                title="Gemini"
+                isEmpty={comparisonMessages.length === 0}
+                emptyMessage="Comparison responses will appear here"
+              />
+            </div>
+          )}
         </div>
 
         {/* Input Box */}
