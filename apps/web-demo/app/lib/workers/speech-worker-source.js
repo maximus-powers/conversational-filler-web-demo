@@ -1,5 +1,14 @@
 import { AutoTokenizer, AutoModelForCausalLM, AutoModel, Tensor, pipeline } from "@huggingface/transformers";
 
+// queue for messages if model not ready 
+let messageQueue = [];
+let isWorkerInitialized = false;
+self.onmessage = (event) => {
+  if (!isWorkerInitialized) {
+    messageQueue.push(event);
+  }
+};
+
 // wrap everything in async IIFE to handle top-level await
 (async () => {
 
@@ -75,32 +84,53 @@ const transcriber = await pipeline(
   throw error;
 });
 await transcriber(new Float32Array(INPUT_SAMPLE_RATE));
-self.postMessage({ 
-  type: "info", 
+self.postMessage({
+  type: "info",
   message: "Whisper model loaded successfully"
 });
 
-let llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
-
-// pipeline seemed to have a bug with loading the custom tokenizer
-let tokenizer = await AutoTokenizer.from_pretrained(llm_model_id, {
-  dtype: "fp32",
-  device: "webgpu",
-});
-let llm = await AutoModelForCausalLM.from_pretrained(llm_model_id, {
-  dtype: "fp32", 
-  device: "webgpu",
-});
-
-// needs to warm up with proper format and compile shaders (this is why we were getting such bad responses before)
+let llm_model_id = null;
+let tokenizer = null;
+let llm = null;
 const warmupPrompt = "<|im_start|>user\nHello<|im_end|>\n<|im_start|>knowledge\n<|sil|><|im_end|>\n";
-let warmupInput = tokenizer(warmupPrompt);
-await llm.generate({
-  ...warmupInput,
-  max_new_tokens: 10,
-  do_sample: false,
-});
 
+async function loadLocalLM(modelId) {
+  const targetModel = modelId || "maximuspowers/smollm-convo-filler-onnx-official";
+
+  self.postMessage({
+    type: "info",
+    message: `Loading LLM model: ${targetModel}...`,
+    duration: "until_next"
+  });
+
+  llm_model_id = targetModel;
+
+  tokenizer = await AutoTokenizer.from_pretrained(llm_model_id, {
+    dtype: "fp32",
+    device: "webgpu",
+  });
+  llm = await AutoModelForCausalLM.from_pretrained(llm_model_id, {
+    dtype: "fp32",
+    device: "webgpu",
+  });
+
+  const warmupInput = tokenizer(warmupPrompt);
+  await llm.generate({
+    ...warmupInput,
+    max_new_tokens: 10,
+    do_sample: false,
+  });
+
+  self.postMessage({
+    type: "info",
+    message: `LLM model ${llm_model_id} loaded successfully`
+  });
+
+  self.postMessage({
+    type: "model_loaded",
+    modelId: llm_model_id
+  });
+}
 
 let messages = [];
 let thoughtProvider = "gemini";
@@ -112,12 +142,7 @@ let currentEnableThoughts = false;
 let currentEnableSmolLM = true;
 let currentEnableTTS = false;
 
-self.postMessage({
-  type: "status",
-  status: "ready",
-  message: "Ready!",
-  voices: availableVoices,
-});
+// Note: Don't send "ready" status here - wait for init message to load LLM model first
 
 const BUFFER = new Float32Array(MAX_BUFFER_DURATION * INPUT_SAMPLE_RATE);
 let bufferPointer = 0;
@@ -661,22 +686,22 @@ const dispatchForTranscriptionAndResetAudioBuffer = (overflow) => {
 // prev buffers FIFO queue
 let prevBuffers = [];
 
-
-
-// message handler
-self.onmessage = async (event) => {
+const handleMessage = async (event) => {
   const { type } = event.data;
-
   // refuse new audio while playing back
   if (type === "audio" && isPlaying) return;
 
   switch (type) {
     case "init":
+      const requestedModel = event.data.modelId;
+      await loadLocalLM(requestedModel);
+
       self.postMessage({
         type: "status",
         status: "ready",
         voices: availableVoices,
-        message: "All models loaded"
+        message: "All models loaded",
+        modelId: llm_model_id
       });
       return;
       
@@ -714,6 +739,15 @@ self.onmessage = async (event) => {
       return;
       
     case "process_text":
+      if (!llm || !tokenizer) {
+        console.error('LLM model not loaded yet');
+        self.postMessage({
+          type: "error",
+          error: "LLM model not loaded. Wait for init to complete."
+        });
+        return;
+      }
+
       // for text mode
       const text = event.data.text;
       const enableTTS = event.data.enableTTS || false;
@@ -792,6 +826,14 @@ self.onmessage = async (event) => {
 
   dispatchForTranscriptionAndResetAudioBuffer();
 };
+
+self.onmessage = handleMessage;
+isWorkerInitialized = true;
+
+for (const queuedEvent of messageQueue) {
+  await handleMessage(queuedEvent);
+}
+messageQueue = [];
 
 })().catch(error => {
   console.error('Worker initialization error:', error);

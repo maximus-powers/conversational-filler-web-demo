@@ -70,11 +70,17 @@ export function Chat({
   const [showSideBySide, setShowSideBySide] = useState(false);
   const [comparisonMessages, setComparisonMessages] = useState<Message[]>([]);
   const [isComparisonLoading, setIsComparisonLoading] = useState(false);
+  const [untrainedMessages, setUntrainedMessages] = useState<Message[]>([]);
+  const [isUntrainedLoading, setIsUntrainedLoading] = useState(false);
+
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
+  const untrainedPipelineRef = useRef<UnifiedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
+  const untrainedMessagesRef = useRef<Map<string, Message>>(new Map());
   const currentUserPromptRef = useRef<string>("");
   const eventDataRef = useRef<EventData | null>(null);
   const pendingGeminiInputRef = useRef<string | null>(null);
+  const pendingUntrainedInputRef = useRef<string | null>(null);
   const comparisonMessagesRef = useRef<Message[]>([]);
 
   const clearEventData = () => {
@@ -240,6 +246,12 @@ export function Chat({
             fetchGeminiComparison(pendingGeminiInputRef.current);
             pendingGeminiInputRef.current = null;
           }
+
+          // trigger untrained model after trained response completes
+          if (pendingUntrainedInputRef.current) {
+            processUntrainedModel(pendingUntrainedInputRef.current);
+            pendingUntrainedInputRef.current = null;
+          }
         },
       }, pipelineFeatures);
 
@@ -261,6 +273,9 @@ export function Chat({
     return () => {
       if (pipelineRef.current) {
         pipelineRef.current.dispose();
+      }
+      if (untrainedPipelineRef.current) {
+        untrainedPipelineRef.current.dispose();
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -375,6 +390,84 @@ export function Chat({
     }
   };
 
+  const processUntrainedModel = async (userInput: string) => {
+    setIsUntrainedLoading(true);
+
+    // init a separate worker for the untrained model
+    if (!untrainedPipelineRef.current) {
+      const untrainedFeatures: PipelineState['features'] = {
+        enableSTT: false,
+        enableThoughts: false,
+        enableSmolLM: true,
+        enableTTS: false,
+        persona: "none",
+      };
+
+      untrainedPipelineRef.current = new UnifiedPipeline({
+        onMessageReceived: (role, content, messageId) => {
+          const message: Message = {
+            id: messageId || `untrained-${Date.now()}`,
+            role,
+            content,
+            processedContent: content,
+          };
+          if (messageId) {
+            untrainedMessagesRef.current.set(messageId, message);
+          }
+          setUntrainedMessages((prev) => {
+            const existing = prev.find((m) => m.id === message.id);
+            if (existing) {
+              return prev.map((m) => (m.id === message.id ? message : m));
+            }
+            return [...prev, message];
+          });
+
+          if (role === "assistant") {
+            setIsUntrainedLoading(false);
+          }
+        },
+
+        onMessageUpdated: (messageId, newContent) => {
+          setUntrainedMessages((prev) =>
+            prev.map((msg) => {
+              if (msg.id === messageId) {
+                const currentContent = msg.processedContent || msg.content;
+                const updatedMessage = {
+                  ...msg,
+                  processedContent: currentContent + " " + newContent,
+                };
+                untrainedMessagesRef.current.set(messageId, updatedMessage);
+                return updatedMessage;
+              }
+              return msg;
+            }),
+          );
+        },
+
+        onStatusChange: (status, message) => {
+          console.log("Untrained pipeline status:", status, message);
+        },
+      }, untrainedFeatures, "HuggingFaceTB/SmolLM-360M-Instruct"); 
+
+      try {
+        await untrainedPipelineRef.current.initialize();
+      } catch (error) {
+        console.error("Failed to initialize untrained pipeline:", error);
+        setIsUntrainedLoading(false);
+        return;
+      }
+    }
+
+    try {
+      if (untrainedPipelineRef.current) {
+        await untrainedPipelineRef.current.processText(userInput);
+      }
+    } catch (error) {
+      console.error("Untrained model processing error:", error);
+      setIsUntrainedLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || isLoading || modelLoading || disabled)
@@ -389,6 +482,7 @@ export function Chat({
 
     if (showSideBySide) {
       pendingGeminiInputRef.current = currentInput;
+      pendingUntrainedInputRef.current = currentInput;
     }
 
     try {
@@ -432,12 +526,16 @@ export function Chat({
   const clearChat = () => {
     setMessages([]);
     setComparisonMessages([]);
+    setUntrainedMessages([]);
     comparisonMessagesRef.current = [];
     messagesRef.current.clear();
+    untrainedMessagesRef.current.clear();
     clearEventData();
     setIsLoading(false);
     setIsComparisonLoading(false);
+    setIsUntrainedLoading(false);
     pendingGeminiInputRef.current = null;
+    pendingUntrainedInputRef.current = null;
     if (responseCompleteTimeout) {
       clearTimeout(responseCompleteTimeout);
       setResponseCompleteTimeout(null);
@@ -569,7 +667,7 @@ export function Chat({
 
           {/* Gemini Side */}
           {showSideBySide && (
-            <div className="flex-1 flex flex-col">
+            <div className="flex-1 flex flex-col border-r">
               <MessageList
                 messages={comparisonMessages}
                 isLoading={isComparisonLoading}
@@ -577,6 +675,20 @@ export function Chat({
                 title="Gemini"
                 isEmpty={comparisonMessages.length === 0}
                 emptyMessage="Comparison responses will appear here"
+              />
+            </div>
+          )}
+
+          {/* Untrained SmolLM Side */}
+          {showSideBySide && (
+            <div className="flex-1 flex flex-col">
+              <MessageList
+                messages={untrainedMessages}
+                isLoading={isUntrainedLoading}
+                showThoughts={false}
+                title="SmolLM (Untrained)"
+                isEmpty={untrainedMessages.length === 0}
+                emptyMessage="Untrained model responses will appear here"
               />
             </div>
           )}

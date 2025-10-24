@@ -43,9 +43,11 @@ export class UnifiedPipeline {
   private isWorkerReady = false;
   private eventTracker = new EventTracker();
   private hasStartedPlayback = false;
+  private modelId?: string;
 
-  constructor(callbacks: PipelineCallbacks, features?: PipelineState['features']) {
+  constructor(callbacks: PipelineCallbacks, features?: PipelineState['features'], modelId?: string) {
     this.callbacks = callbacks;
+    this.modelId = modelId;
     this.state = {
       features: features || {
         enableSTT: false,
@@ -74,7 +76,10 @@ export class UnifiedPipeline {
       if (this.state.features.enableSTT) {
         await this.setupAudioContexts();
       }
-      this.worker.postMessage({ type: "init" });
+      this.worker.postMessage({
+        type: "init",
+        modelId: this.modelId
+      });
 
       // wait for worker to be ready
       await new Promise<void>((resolve, reject) => {
@@ -178,6 +183,8 @@ export class UnifiedPipeline {
           break;
         case "thought_response_pairs":
           this.handleThoughtResponsePairs(data);
+          break;
+        case "model_loaded":
           break;
       }
     };

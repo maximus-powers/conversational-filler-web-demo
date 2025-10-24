@@ -46680,6 +46680,13 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
   var __webpack_exports__zeros_like = __webpack_exports__.zeros_like;
 
   // app/lib/workers/speech-worker-source.js
+  var messageQueue = [];
+  var isWorkerInitialized = false;
+  self.onmessage = (event) => {
+    if (!isWorkerInitialized) {
+      messageQueue.push(event);
+    }
+  };
   (async () => {
     const INPUT_SAMPLE_RATE = 16e3;
     const INPUT_SAMPLE_RATE_MS = INPUT_SAMPLE_RATE / 1e3;
@@ -46746,22 +46753,41 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
       type: "info",
       message: "Whisper model loaded successfully"
     });
-    let llm_model_id = "maximuspowers/smollm-convo-filler-onnx-official";
-    let tokenizer = await __webpack_exports__AutoTokenizer.from_pretrained(llm_model_id, {
-      dtype: "fp32",
-      device: "webgpu"
-    });
-    let llm = await __webpack_exports__AutoModelForCausalLM.from_pretrained(llm_model_id, {
-      dtype: "fp32",
-      device: "webgpu"
-    });
+    let llm_model_id = null;
+    let tokenizer = null;
+    let llm = null;
     const warmupPrompt = "<|im_start|>user\nHello<|im_end|>\n<|im_start|>knowledge\n<|sil|><|im_end|>\n";
-    let warmupInput = tokenizer(warmupPrompt);
-    await llm.generate({
-      ...warmupInput,
-      max_new_tokens: 10,
-      do_sample: false
-    });
+    async function loadLocalLM(modelId) {
+      const targetModel = modelId || "maximuspowers/smollm-convo-filler-onnx-official";
+      self.postMessage({
+        type: "info",
+        message: `Loading LLM model: ${targetModel}...`,
+        duration: "until_next"
+      });
+      llm_model_id = targetModel;
+      tokenizer = await __webpack_exports__AutoTokenizer.from_pretrained(llm_model_id, {
+        dtype: "fp32",
+        device: "webgpu"
+      });
+      llm = await __webpack_exports__AutoModelForCausalLM.from_pretrained(llm_model_id, {
+        dtype: "fp32",
+        device: "webgpu"
+      });
+      const warmupInput = tokenizer(warmupPrompt);
+      await llm.generate({
+        ...warmupInput,
+        max_new_tokens: 10,
+        do_sample: false
+      });
+      self.postMessage({
+        type: "info",
+        message: `LLM model ${llm_model_id} loaded successfully`
+      });
+      self.postMessage({
+        type: "model_loaded",
+        modelId: llm_model_id
+      });
+    }
     let messages = [];
     let thoughtProvider = "gemini";
     let currentMessageId = null;
@@ -46769,12 +46795,6 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
     let currentEnableThoughts = false;
     let currentEnableSmolLM = true;
     let currentEnableTTS = false;
-    self.postMessage({
-      type: "status",
-      status: "ready",
-      message: "Ready!",
-      voices: availableVoices
-    });
     const BUFFER = new Float32Array(MAX_BUFFER_DURATION * INPUT_SAMPLE_RATE);
     let bufferPointer = 0;
     const sr = new __webpack_exports__Tensor("int64", [INPUT_SAMPLE_RATE], []);
@@ -47235,16 +47255,19 @@ ${thought}<|im_end|>
       resetAfterRecording(overflowLength);
     };
     let prevBuffers = [];
-    self.onmessage = async (event) => {
+    const handleMessage = async (event) => {
       const { type } = event.data;
       if (type === "audio" && isPlaying) return;
       switch (type) {
         case "init":
+          const requestedModel = event.data.modelId;
+          await loadLocalLM(requestedModel);
           self.postMessage({
             type: "status",
             status: "ready",
             voices: availableVoices,
-            message: "All models loaded"
+            message: "All models loaded",
+            modelId: llm_model_id
           });
           return;
         case "set_voice":
@@ -47274,6 +47297,14 @@ ${thought}<|im_end|>
           clearSilenceTimer();
           return;
         case "process_text":
+          if (!llm || !tokenizer) {
+            console.error("LLM model not loaded yet");
+            self.postMessage({
+              type: "error",
+              error: "LLM model not loaded. Wait for init to complete."
+            });
+            return;
+          }
           const text = event.data.text;
           const enableTTS = event.data.enableTTS || false;
           const enableThoughts = event.data.enableThoughts !== void 0 ? event.data.enableThoughts : true;
@@ -47338,6 +47369,12 @@ ${thought}<|im_end|>
       }
       dispatchForTranscriptionAndResetAudioBuffer();
     };
+    self.onmessage = handleMessage;
+    isWorkerInitialized = true;
+    for (const queuedEvent of messageQueue) {
+      await handleMessage(queuedEvent);
+    }
+    messageQueue = [];
   })().catch((error) => {
     console.error("Worker initialization error:", error);
     self.postMessage({ error: error.message });
