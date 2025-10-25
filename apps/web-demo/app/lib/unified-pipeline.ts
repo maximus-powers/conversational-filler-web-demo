@@ -75,7 +75,10 @@ export class UnifiedPipeline {
 
     try {
       // force reload of worker
-      const workerUrl = `/speech-worker-bundled.js?v=${Date.now()}`;
+      // Use untrained worker for untrained SmolLM model
+      const isUntrainedModel = this.modelId === "HuggingFaceTB/SmolLM-360M-Instruct";
+      const workerFile = isUntrainedModel ? "speech-worker-untrained-bundled.js" : "speech-worker-bundled.js";
+      const workerUrl = `/${workerFile}?v=${Date.now()}`;
       this.worker = new Worker(workerUrl);
       this.setupWorkerListeners();
 
