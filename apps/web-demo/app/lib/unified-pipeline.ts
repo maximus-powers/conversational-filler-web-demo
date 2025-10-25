@@ -605,6 +605,12 @@ export class UnifiedPipeline {
     this.eventTracker.reset();
   }
 
+  clearMessages() {
+    if (this.worker) {
+      this.worker.postMessage({ type: "end_call" });
+    }
+  }
+
   private disposeAudioContexts() {
     if (this.state.isRecording && this.worker) {
       this.state.isRecording = false;

@@ -541,6 +541,13 @@ export function Chat({
       setResponseCompleteTimeout(null);
     }
     setCurrentAssistantMessageId(null);
+
+    if (pipelineRef.current) {
+      pipelineRef.current.clearMessages();
+    }
+    if (untrainedPipelineRef.current) {
+      untrainedPipelineRef.current.clearMessages();
+    }
   };
 
 
