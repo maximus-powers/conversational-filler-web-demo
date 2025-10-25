@@ -16,12 +16,14 @@ export interface PipelineCallbacks {
   onConversationStart?: (startTime: number) => void;
 }
 
+export type SmolLMMode = "convfill" | "untrained" | "none";
+
 export interface PipelineState {
   features: {
     enableSTT: boolean;
     sttMode?: "local" | "api";
     enableThoughts: boolean;
-    enableSmolLM: boolean;
+    smolLMMode: SmolLMMode;
     enableTTS: boolean;
     persona: string;
   };
@@ -56,7 +58,7 @@ export class UnifiedPipeline {
       enableSTT: false,
       sttMode: "local" as "local" | "api",
       enableThoughts: true,
-      enableSmolLM: true,
+      smolLMMode: "convfill" as SmolLMMode,
       enableTTS: false,
       persona: "none",
     };
@@ -75,8 +77,8 @@ export class UnifiedPipeline {
 
     try {
       // force reload of worker
-      // Use untrained worker for untrained SmolLM model
-      const isUntrainedModel = this.modelId === "HuggingFaceTB/SmolLM-360M-Instruct";
+      const isUntrainedModel = this.modelId === "HuggingFaceTB/SmolLM-360M-Instruct" ||
+                               this.state.features.smolLMMode === "untrained";
       const workerFile = isUntrainedModel ? "speech-worker-untrained-bundled.js" : "speech-worker-bundled.js";
       const workerUrl = `/${workerFile}?v=${Date.now()}`;
       this.worker = new Worker(workerUrl);
@@ -85,9 +87,15 @@ export class UnifiedPipeline {
       if (this.state.features.enableSTT) {
         await this.setupAudioContexts();
       }
+
+      let targetModelId = this.modelId;
+      if (!targetModelId && this.state.features.smolLMMode === "untrained") {
+        targetModelId = "HuggingFaceTB/SmolLM-360M-Instruct";
+      }
+
       this.worker.postMessage({
         type: "init",
-        modelId: this.modelId
+        modelId: targetModelId
       });
 
       // wait for worker to be ready
@@ -110,7 +118,7 @@ export class UnifiedPipeline {
       if (this.worker) {
         const provider = features.enableThoughts ? "gemini" : "none";
         this.worker.postMessage({ type: "set_thought_provider", provider });
-        this.worker.postMessage({ type: "set_smollm_enabled", enabled: features.enableSmolLM });
+        this.worker.postMessage({ type: "set_smollm_enabled", enabled: features.smolLMMode !== "none" });
         this.worker.postMessage({ type: "set_tts_enabled", enabled: features.enableTTS });
         this.worker.postMessage({ type: "set_persona", persona: features.persona });
       }
@@ -562,10 +570,12 @@ export class UnifiedPipeline {
   async processText(text: string) {
     const config = this.state.features;
 
-    if (!config.enableSmolLM && config.enableThoughts) {
+    if (config.smolLMMode === "none" && config.enableThoughts) {
       return this.processTextWithGeminiStandalone(text);
     }
-
+    if (config.smolLMMode === "untrained" && !config.enableThoughts) {
+      return this.processTextWithUntrainedSmolLM(text);
+    }
     if (!this.worker || !this.isWorkerReady) {
       throw new Error("Pipeline not ready");
     }
@@ -590,7 +600,7 @@ export class UnifiedPipeline {
       text: text.trim(),
       enableTTS: config.enableTTS,
       enableThoughts: config.enableThoughts,
-      enableSmolLM: config.enableSmolLM,
+      enableSmolLM: config.smolLMMode !== "none",
     });
   }
 
@@ -632,37 +642,57 @@ export class UnifiedPipeline {
 
       const assistantMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
       let fullResponse = "";
-      let firstToken = false;
+      const decoder = new TextDecoder();
+
+      this.callbacks.onMessageReceived?.("assistant", "", assistantMessageId);
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const chunk = new TextDecoder().decode(value);
-        
-        if (chunk.includes('[first_token]')) {
-          firstToken = true;
-          this.callbacks.onStatusChange?.("processing_complete", "");
-          continue;
-        }
-        
-        if (chunk.includes('[done]')) {
-          this.callbacks.onStatusChange?.("response_complete", "");
-          this.state.isProcessing = false;
-          break;
-        }
 
-        fullResponse += chunk;        
-        if (firstToken) {
-          this.callbacks.onMessageReceived?.("assistant", fullResponse, assistantMessageId);
-          this.callbacks.onMessageUpdated?.(assistantMessageId, fullResponse);
-        }
+        const chunk = decoder.decode(value, { stream: true });
+        fullResponse += chunk;
+
+        this.callbacks.onMessageReceived?.("assistant", fullResponse, assistantMessageId);
       }
+
+      this.callbacks.onStatusChange?.("response_complete", "");
+      this.state.isProcessing = false;
 
     } catch (error) {
       console.error("Error in Gemini-standalone processing:", error);
       this.callbacks.onStatusChange?.("error", `Failed to process with Gemini: ${error}`);
       this.state.isProcessing = false;
     }
+  }
+
+  private async processTextWithUntrainedSmolLM(text: string) {
+    this.state.isProcessing = true;
+    this.state.currentMessageId = null;
+
+    if (!this.eventTracker.hasActiveTurn()) {
+      this.startNewTurn();
+    }
+
+    const userMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    this.callbacks.onMessageReceived?.("user", text, userMessageId);
+
+    if (this.eventTracker.hasActiveTurn()) {
+      this.eventTracker.addEvent("UserInputReceived", { text });
+      this.callbacks.onEventData?.(this.eventTracker.getData());
+    }
+
+    if (!this.worker || !this.isWorkerReady) {
+      throw new Error("Untrained worker not ready");
+    }
+
+    this.worker.postMessage({
+      type: "process_text",
+      text: text.trim(),
+      enableTTS: this.state.features.enableTTS,
+      enableThoughts: false,
+      enableSmolLM: true,
+    });
   }
 
   updateFeatures(features: Partial<PipelineState['features']>) {
@@ -672,8 +702,8 @@ export class UnifiedPipeline {
         const provider = features.enableThoughts ? "gemini" : "none";
         this.worker.postMessage({ type: "set_thought_provider", provider });
       }
-      if (features.enableSmolLM !== undefined) {
-        this.worker.postMessage({ type: "set_smollm_enabled", enabled: features.enableSmolLM });
+      if (features.smolLMMode !== undefined) {
+        this.worker.postMessage({ type: "set_smollm_enabled", enabled: features.smolLMMode !== "none" });
       }
       if (features.enableTTS !== undefined) {
         this.worker.postMessage({ type: "set_tts_enabled", enabled: features.enableTTS });
@@ -705,7 +735,8 @@ export class UnifiedPipeline {
 
   private startNewTurn() {
     const metadata: TurnMetadata = {
-      localModel: this.state.features.enableSmolLM ? "smollm-finetuned" : "none",
+      localModel: this.state.features.smolLMMode === "convfill" ? "smollm-finetuned" :
+                  this.state.features.smolLMMode === "untrained" ? "smollm-untrained" : "none",
       thoughtModel: this.state.features.enableThoughts ? "gemini-flash-2.0" : "none",
       voiceMode: this.state.features.enableSTT
     };

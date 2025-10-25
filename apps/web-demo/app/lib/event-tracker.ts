@@ -25,7 +25,7 @@ export interface TimelineEvent {
 }
 
 export interface TurnMetadata {
-  localModel: "smollm-finetuned" | "none";
+  localModel: "smollm-finetuned" | "smollm-untrained" | "none";
   thoughtModel: "gemini-flash-2.0" | "none";
   voiceMode: boolean;
 }

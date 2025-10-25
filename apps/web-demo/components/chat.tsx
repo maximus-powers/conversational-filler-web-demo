@@ -58,7 +58,9 @@ export function Chat({
   // pipeline config
   const [sttMode, setSTTMode] = useState<"disabled" | "local" | "api">(voiceMode ? "local" : "disabled");
   const [enableThoughts, setEnableThoughts] = useState(config?.thoughtModel !== "none");
-  const [enableSmolLM, setEnableSmolLM] = useState(config?.localModel !== null);
+  const [smolLMMode, setSmolLMMode] = useState<"convfill" | "untrained" | "none">(
+    config?.localModel !== null ? "convfill" : "none"
+  );
   const [enableTTS, setEnableTTS] = useState(false);
   const [persona, setPersona] = useState("none");
   const [isListening, setIsListening] = useState(false);
@@ -82,6 +84,7 @@ export function Chat({
   const pendingGeminiInputRef = useRef<string | null>(null);
   const pendingUntrainedInputRef = useRef<string | null>(null);
   const comparisonMessagesRef = useRef<Message[]>([]);
+  const pipelineCallbacksRef = useRef<any>(null);
 
   const clearEventData = () => {
     setEventData(null);
@@ -97,7 +100,8 @@ export function Chat({
     if (!feedbackMode && promptToUse) {
       saveConversation({
         conversationId,
-        localModel: enableSmolLM ? "maximuspowers/smollm-convo-filler-onnx-official" : null,
+        localModel: smolLMMode === "convfill" ? "maximuspowers/smollm-convo-filler-onnx-official" :
+                    smolLMMode === "untrained" ? "HuggingFaceTB/SmolLM-360M-Instruct" : null,
         thoughtModel: enableThoughts ? "gemini" : "none",
         voiceMode: sttMode !== "disabled",
         userPrompt: promptToUse,
@@ -144,13 +148,13 @@ export function Chat({
         enableSTT,
         sttMode: sttMode === "disabled" ? undefined : sttMode,
         enableThoughts,
-        enableSmolLM,
+        smolLMMode,
         enableTTS,
         persona,
       };
 
-      pipelineRef.current = new UnifiedPipeline({
-        onMessageReceived: (role, content, messageId) => {
+      const callbacks = {
+        onMessageReceived: (role: "user" | "assistant", content: string, messageId?: string) => {
           const message: Message = {
             id: messageId || Date.now().toString(),
             role,
@@ -178,7 +182,7 @@ export function Chat({
           }
         },
 
-        onMessageUpdated: (messageId, newContent) => {
+        onMessageUpdated: (messageId: string, newContent: string) => {
           setMessages((prev) =>
             prev.map((msg) => {
               if (msg.id === messageId) {
@@ -199,7 +203,7 @@ export function Chat({
         },
 
 
-        onStatusChange: (status, message) => {
+        onStatusChange: (status: string, message: string) => {
           setModelLoadingProgress(message);
           if (status === "ready") {
             setModelLoading(false);
@@ -228,7 +232,7 @@ export function Chat({
           setConversationStartTime(startTime);
         },
 
-        onThoughtResponsePairs: (pairs, messageId) => {
+        onThoughtResponsePairs: (pairs: Array<{thought: string, response: string}>, messageId: string) => {
           setMessages((prev) =>
             prev.map((msg) => {
               if (msg.id === messageId) {
@@ -255,10 +259,29 @@ export function Chat({
             pendingUntrainedInputRef.current = null;
           }
         },
-      }, pipelineFeatures);
+      };
+
+      pipelineCallbacksRef.current = callbacks;
+      pipelineRef.current = new UnifiedPipeline(callbacks, pipelineFeatures);
+
+      const untrainedFeatures: PipelineState['features'] = {
+        enableSTT: false,
+        enableThoughts: false,
+        smolLMMode: "untrained",
+        enableTTS: false,
+        persona: "none",
+      };
+      untrainedPipelineRef.current = new UnifiedPipeline(
+        callbacks,
+        untrainedFeatures,
+        "HuggingFaceTB/SmolLM-360M-Instruct"
+      );
 
       try {
-        await pipelineRef.current.initialize();
+        await Promise.all([
+          pipelineRef.current.initialize(),
+          untrainedPipelineRef.current.initialize()
+        ]);
 
         const initEndTime = Date.now();
         const loadTime = ((initEndTime - initStartTime) / 1000).toFixed(2);
@@ -295,16 +318,25 @@ export function Chat({
   };
 
   const handleToggleThoughts = (enabled: boolean) => {
+    if (enabled && smolLMMode === "untrained") {
+      return;
+    }
     setEnableThoughts(enabled);
     if (pipelineRef.current) {
       pipelineRef.current.updateFeatures({ enableThoughts: enabled });
     }
   };
 
-  const handleToggleSmolLM = (enabled: boolean) => {
-    setEnableSmolLM(enabled);
+  const handleSmolLMModeChange = (mode: "convfill" | "untrained" | "none") => {
+    setSmolLMMode(mode);
+    if (mode === "untrained") {
+      setEnableThoughts(false);
+    }
     if (pipelineRef.current) {
-      pipelineRef.current.updateFeatures({ enableSmolLM: enabled });
+      pipelineRef.current.updateFeatures({
+        smolLMMode: mode,
+        enableThoughts: mode === "untrained" ? false : enableThoughts
+      });
     }
   };
 
@@ -404,13 +436,13 @@ export function Chat({
       const untrainedFeatures: PipelineState['features'] = {
         enableSTT: false,
         enableThoughts: false,
-        enableSmolLM: true,
+        smolLMMode: "untrained",
         enableTTS: false,
         persona: "none",
       };
 
       untrainedPipelineRef.current = new UnifiedPipeline({
-        onMessageReceived: (role, content, messageId) => {
+        onMessageReceived: (role: "user" | "assistant", content: string, messageId?: string) => {
           const message: Message = {
             id: messageId || `untrained-${Date.now()}`,
             role,
@@ -433,7 +465,7 @@ export function Chat({
           }
         },
 
-        onMessageUpdated: (messageId, newContent) => {
+        onMessageUpdated: (messageId: string, newContent: string) => {
           setUntrainedMessages((prev) =>
             prev.map((msg) => {
               if (msg.id === messageId) {
@@ -450,7 +482,7 @@ export function Chat({
           );
         },
 
-        onStatusChange: (status, message) => {
+        onStatusChange: (status: string, message: string) => {
           console.log("Untrained pipeline status:", status, message);
         },
       }, untrainedFeatures, "HuggingFaceTB/SmolLM-360M-Instruct"); 
@@ -492,7 +524,9 @@ export function Chat({
     }
 
     try {
-      if (pipelineRef.current) {
+      if (smolLMMode === "untrained" && untrainedPipelineRef.current) {
+        await untrainedPipelineRef.current.processText(currentInput);
+      } else if (pipelineRef.current) {
         await pipelineRef.current.processText(currentInput);
       } else {
         // todo: remove this
@@ -576,12 +610,12 @@ export function Chat({
                 <PipelineControls
                   sttMode={sttMode}
                   enableThoughts={enableThoughts}
-                  enableSmolLM={enableSmolLM}
+                  smolLMMode={smolLMMode}
                   enableTTS={enableTTS}
                   persona={persona}
                   onSTTModeChange={handleSTTModeChange}
                   onToggleThoughts={handleToggleThoughts}
-                  onToggleSmolLM={handleToggleSmolLM}
+                  onSmolLMModeChange={handleSmolLMModeChange}
                   onToggleTTS={handleToggleTTS}
                   onPersonaChange={handlePersonaChange}
                   disabled={modelLoading || isLoading}

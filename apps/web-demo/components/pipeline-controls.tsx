@@ -4,16 +4,17 @@ import { Mic, Brain, Speaker, MessageSquare, ChevronDown, User } from "lucide-re
 import { useState, useRef, useEffect } from "react";
 
 export type STTMode = "disabled" | "local" | "api";
+export type SmolLMMode = "convfill" | "untrained" | "none";
 
 export interface PipelineControlsProps {
   sttMode: STTMode;
   enableThoughts: boolean;
-  enableSmolLM: boolean;
+  smolLMMode: SmolLMMode;
   enableTTS: boolean;
   persona: string;
   onSTTModeChange: (mode: STTMode) => void;
   onToggleThoughts: (enabled: boolean) => void;
-  onToggleSmolLM: (enabled: boolean) => void;
+  onSmolLMModeChange: (mode: SmolLMMode) => void;
   onToggleTTS: (enabled: boolean) => void;
   onPersonaChange: (persona: string) => void;
   disabled?: boolean;
@@ -31,12 +32,12 @@ const PERSONA_OPTIONS = [
 export function PipelineControls({
   sttMode,
   enableThoughts,
-  enableSmolLM,
+  smolLMMode,
   enableTTS,
   persona,
   onSTTModeChange,
   onToggleThoughts,
-  onToggleSmolLM,
+  onSmolLMModeChange,
   onToggleTTS,
   onPersonaChange,
   disabled = false,
@@ -87,13 +88,13 @@ export function PipelineControls({
       {/* Thoughts Toggle */}
       <button
         onClick={() => onToggleThoughts(!enableThoughts)}
-        disabled={disabled}
+        disabled={disabled || smolLMMode === "untrained"}
         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
           enableThoughts
             ? "bg-green-500 text-white hover:bg-green-600"
             : "bg-muted text-muted-foreground hover:bg-muted/80"
         } disabled:opacity-50 disabled:cursor-not-allowed`}
-        title="Gemini Thoughts"
+        title={smolLMMode === "untrained" ? "Thoughts not available in Untrained mode" : "Gemini Thoughts"}
       >
         <Brain className="h-3.5 w-3.5" />
         <span>Thoughts</span>
@@ -101,17 +102,27 @@ export function PipelineControls({
 
       {/* SmolLM Toggle */}
       <button
-        onClick={() => onToggleSmolLM(!enableSmolLM)}
+        onClick={() => {
+          if (smolLMMode === "none") {
+            onSmolLMModeChange("convfill");
+          } else if (smolLMMode === "convfill") {
+            onSmolLMModeChange("untrained");
+          } else {
+            onSmolLMModeChange("none");
+          }
+        }}
         disabled={disabled}
         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-          enableSmolLM
+          smolLMMode === "convfill"
             ? "bg-blue-500 text-white hover:bg-blue-600"
+            : smolLMMode === "untrained"
+            ? "bg-indigo-500 text-white hover:bg-indigo-600"
             : "bg-muted text-muted-foreground hover:bg-muted/80"
         } disabled:opacity-50 disabled:cursor-not-allowed`}
-        title="SmolLM Filler"
+        title={smolLMMode === "convfill" ? "ConvFill" : smolLMMode === "untrained" ? "Untrained SmolLM" : "SmolLM"}
       >
         <MessageSquare className="h-3.5 w-3.5" />
-        <span>SmolLM</span>
+        <span>{smolLMMode === "convfill" ? "ConvFill" : smolLMMode === "untrained" ? "Untrained" : "SmolLM"}</span>
       </button>
 
       {/* TTS Toggle */}
