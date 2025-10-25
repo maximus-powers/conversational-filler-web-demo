@@ -17,7 +17,7 @@ const INPUT_SAMPLE_RATE = 16000;
 const INPUT_SAMPLE_RATE_MS = INPUT_SAMPLE_RATE / 1000;
 const SPEECH_THRESHOLD = 0.3;
 const EXIT_THRESHOLD = 0.1;
-const MIN_SILENCE_DURATION_MS = 400; 
+const MIN_SILENCE_DURATION_MS = 1200; 
 const MIN_SILENCE_DURATION_SAMPLES = MIN_SILENCE_DURATION_MS * INPUT_SAMPLE_RATE_MS;
 const SPEECH_PAD_MS = 80;
 const SPEECH_PAD_SAMPLES = SPEECH_PAD_MS * INPUT_SAMPLE_RATE_MS;
@@ -76,8 +76,7 @@ const transcriber = await pipeline(
   "automatic-speech-recognition",
   "onnx-community/whisper-base",
   {
-    device,
-    dtype: DEVICE_DTYPE_CONFIGS[device],
+    device
   },
 ).catch((error) => {
   self.postMessage({ error });
