@@ -3,13 +3,15 @@
 import { Mic, Brain, Speaker, MessageSquare, ChevronDown, User } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 
+export type STTMode = "disabled" | "local" | "api";
+
 export interface PipelineControlsProps {
-  enableSTT: boolean;
+  sttMode: STTMode;
   enableThoughts: boolean;
   enableSmolLM: boolean;
   enableTTS: boolean;
   persona: string;
-  onToggleSTT: (enabled: boolean) => void;
+  onSTTModeChange: (mode: STTMode) => void;
   onToggleThoughts: (enabled: boolean) => void;
   onToggleSmolLM: (enabled: boolean) => void;
   onToggleTTS: (enabled: boolean) => void;
@@ -27,12 +29,12 @@ const PERSONA_OPTIONS = [
 ];
 
 export function PipelineControls({
-  enableSTT,
+  sttMode,
   enableThoughts,
   enableSmolLM,
   enableTTS,
   persona,
-  onToggleSTT,
+  onSTTModeChange,
   onToggleThoughts,
   onToggleSmolLM,
   onToggleTTS,
@@ -61,17 +63,25 @@ export function PipelineControls({
     <div className="flex items-center gap-3">
       {/* STT Toggle */}
       <button
-        onClick={() => onToggleSTT(!enableSTT)}
+        onClick={() => {
+          if (sttMode === "disabled") {
+            onSTTModeChange("local");
+          } else if (sttMode === "local") {
+            onSTTModeChange("api");
+          } else {
+            onSTTModeChange("disabled");
+          }
+        }}
         disabled={disabled}
         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-          enableSTT
+          sttMode !== "disabled"
             ? "bg-purple-500 text-white hover:bg-purple-600"
             : "bg-muted text-muted-foreground hover:bg-muted/80"
         } disabled:opacity-50 disabled:cursor-not-allowed`}
         title="Speech-to-Text"
       >
         <Mic className="h-3.5 w-3.5" />
-        <span>STT</span>
+        <span>{sttMode === "local" ? "STT (Local)" : sttMode === "api" ? "STT (API)" : "STT"}</span>
       </button>
 
       {/* Thoughts Toggle */}

@@ -56,7 +56,7 @@ export function Chat({
     number | null
   >(null);
   // pipeline config
-  const [enableSTT, setEnableSTT] = useState(voiceMode || false);
+  const [sttMode, setSTTMode] = useState<"disabled" | "local" | "api">(voiceMode ? "local" : "disabled");
   const [enableThoughts, setEnableThoughts] = useState(config?.thoughtModel !== "none");
   const [enableSmolLM, setEnableSmolLM] = useState(config?.localModel !== null);
   const [enableTTS, setEnableTTS] = useState(false);
@@ -99,7 +99,7 @@ export function Chat({
         conversationId,
         localModel: enableSmolLM ? "maximuspowers/smollm-convo-filler-onnx-official" : null,
         thoughtModel: enableThoughts ? "gemini" : "none",
-        voiceMode: enableSTT,
+        voiceMode: sttMode !== "disabled",
         userPrompt: promptToUse,
         aiResponse: fullResponse,
         eventData: eventDataRef.current || eventData,
@@ -139,8 +139,10 @@ export function Chat({
 
       setModelLoadingProgress("Loading models...");
 
+      const enableSTT = sttMode !== "disabled";
       const pipelineFeatures: PipelineState['features'] = {
         enableSTT,
+        sttMode: sttMode === "disabled" ? undefined : sttMode,
         enableThoughts,
         enableSmolLM,
         enableTTS,
@@ -281,10 +283,14 @@ export function Chat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleToggleSTT = async (enabled: boolean) => {
-    setEnableSTT(enabled);
+  const handleSTTModeChange = async (mode: "disabled" | "local" | "api") => {
+    setSTTMode(mode);
     if (pipelineRef.current) {
-      await pipelineRef.current.toggleSTT(enabled);
+      if (mode === "disabled") {
+        await pipelineRef.current.toggleSTT(false);
+      } else {
+        await pipelineRef.current.toggleSTT(true, mode);
+      }
     }
   };
 
@@ -557,7 +563,7 @@ export function Chat({
         <Timeline
           eventData={eventData}
           conversationStartTime={conversationStartTime}
-          mode={enableSTT ? "voice" : "text"}
+          mode={sttMode !== "disabled" ? "voice" : "text"}
         />
       )}
 
@@ -568,12 +574,12 @@ export function Chat({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <PipelineControls
-                  enableSTT={enableSTT}
+                  sttMode={sttMode}
                   enableThoughts={enableThoughts}
                   enableSmolLM={enableSmolLM}
                   enableTTS={enableTTS}
                   persona={persona}
-                  onToggleSTT={handleToggleSTT}
+                  onSTTModeChange={handleSTTModeChange}
                   onToggleThoughts={handleToggleThoughts}
                   onToggleSmolLM={handleToggleSmolLM}
                   onToggleTTS={handleToggleTTS}
@@ -663,7 +669,7 @@ export function Chat({
               showThoughts={showThoughts}
               title={showSideBySide ? "ConvFill" : undefined}
               isEmpty={messages.length === 0}
-              emptyMessage={enableSTT
+              emptyMessage={sttMode !== "disabled"
                 ? "Just start speaking! I'm listening and will respond."
                 : "Type a message below to start chatting."}
               showWelcome={!showSideBySide}
@@ -711,7 +717,7 @@ export function Chat({
               placeholder={
                 modelLoading
                   ? "Waiting for models to load..."
-                  : enableSTT
+                  : sttMode !== "disabled"
                     ? "Type a message or use voice recording..."
                     : "Type your message..."
               }

@@ -19,6 +19,7 @@ export interface PipelineCallbacks {
 export interface PipelineState {
   features: {
     enableSTT: boolean;
+    sttMode?: "local" | "api";
     enableThoughts: boolean;
     enableSmolLM: boolean;
     enableTTS: boolean;
@@ -44,18 +45,23 @@ export class UnifiedPipeline {
   private eventTracker = new EventTracker();
   private hasStartedPlayback = false;
   private modelId?: string;
+  private mediaRecorder: MediaRecorder | null = null;
+  private audioChunks: Blob[] = [];
+  private vadCheckInterval: NodeJS.Timeout | null = null;
 
   constructor(callbacks: PipelineCallbacks, features?: PipelineState['features'], modelId?: string) {
     this.callbacks = callbacks;
     this.modelId = modelId;
+    const defaultFeatures = {
+      enableSTT: false,
+      sttMode: "local" as "local" | "api",
+      enableThoughts: true,
+      enableSmolLM: true,
+      enableTTS: false,
+      persona: "none",
+    };
     this.state = {
-      features: features || {
-        enableSTT: false,
-        enableThoughts: true,
-        enableSmolLM: true,
-        enableTTS: false,
-        persona: "none",
-      },
+      features: features ? { ...defaultFeatures, ...features } : defaultFeatures,
       isReady: false,
       isProcessing: false,
       isRecording: false,
@@ -421,38 +427,133 @@ export class UnifiedPipeline {
           noiseSuppression: true,
         } as MediaTrackConstraints,
       });
-      const source = this.audioContext.createMediaStreamSource(
-        this.mediaStream,
-      );
 
-      // register VAD processor
-      await this.audioContext.audioWorklet.addModule(
-        "/workers/vad-processor.js",
-      );
-      this.worklet = new AudioWorkletNode(this.audioContext, "vad-processor", {
-        numberOfInputs: 1,
-        numberOfOutputs: 1,
-        channelCount: 1,
-        processorOptions: { sampleRate: INPUT_SAMPLE_RATE },
-      });
+      // media recorder needed for api stt for chunks
+      if (this.state.features.sttMode === "api") {
+        await this.setupAPIRecording();
+      } else {
+        // local mode - use worklet for VAD
+        const source = this.audioContext.createMediaStreamSource(
+          this.mediaStream,
+        );
 
-      source.connect(this.worklet);
-      this.worklet.connect(this.audioContext.destination);
+        // register VAD processor
+        await this.audioContext.audioWorklet.addModule(
+          "/workers/vad-processor.js",
+        );
+        this.worklet = new AudioWorkletNode(this.audioContext, "vad-processor", {
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          channelCount: 1,
+          processorOptions: { sampleRate: INPUT_SAMPLE_RATE },
+        });
 
-      let audioMessageCount = 0;
-      this.worklet.port.onmessage = (event) => {
-        audioMessageCount++;
-        if (event.data.type === "audio" && this.worker) {
-          this.worker.postMessage({
-            type: "audio",
-            buffer: event.data.audio,
-          });
-        }
-      };
+        source.connect(this.worklet);
+        this.worklet.connect(this.audioContext.destination);
+
+        let audioMessageCount = 0;
+        this.worklet.port.onmessage = (event) => {
+          audioMessageCount++;
+          if (event.data.type === "audio" && this.worker) {
+            this.worker.postMessage({
+              type: "audio",
+              buffer: event.data.audio,
+            });
+          }
+        };
+      }
     } catch (error) {
       console.error("Failed to setup microphone:", error);
       throw error;
     }
+  }
+
+  private async setupAPIRecording() {
+    if (!this.mediaStream) return;
+
+    this.mediaRecorder = new MediaRecorder(this.mediaStream, {
+      mimeType: 'audio/webm',
+    });
+
+    this.mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        this.audioChunks.push(event.data);
+      }
+    };
+
+    this.mediaRecorder.onstop = async () => {
+      if (this.audioChunks.length === 0) return;
+
+      const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+      this.audioChunks = [];
+
+      try {
+        const formData = new FormData();
+        formData.append('file', audioBlob, 'recording.webm');
+
+        const response = await fetch('/api/elevenlabs-stt', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          if (result.transcript) {
+            this.callbacks.onTranscriptionReceived?.(result.transcript);
+            await this.processText(result.transcript);
+          }
+        } else {
+          console.error('STT API failed:', await response.text());
+        }
+      } catch (error) {
+        console.error('Error transcribing audio:', error);
+      }
+
+      this.state.isRecording = false;
+      this.callbacks.onStatusChange?.("recording_end", "");
+    };
+
+    this.startVADMonitoring();
+  }
+
+  private startVADMonitoring() {
+    if (!this.mediaStream) return;
+
+    const audioContext = new AudioContext({ sampleRate: INPUT_SAMPLE_RATE });
+    const source = audioContext.createMediaStreamSource(this.mediaStream);
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    let silenceStart: number | null = null;
+    let isCurrentlyRecording = false;
+
+    const checkAudioLevel = () => {
+      analyser.getByteFrequencyData(dataArray);
+      const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+      const isSpeech = average > 10; 
+      if (isSpeech && !isCurrentlyRecording) {
+        isCurrentlyRecording = true;
+        silenceStart = null;
+        this.audioChunks = [];
+        this.mediaRecorder?.start();
+        this.state.isRecording = true;
+        this.callbacks.onStatusChange?.("recording_start", "Listening...");
+      } else if (!isSpeech && isCurrentlyRecording) {
+        if (silenceStart === null) {
+          silenceStart = Date.now();
+        } else if (Date.now() - silenceStart > 800) { // 800ms silence
+          this.mediaRecorder?.stop();
+          isCurrentlyRecording = false;
+          silenceStart = null;
+        }
+      } else if (isSpeech && isCurrentlyRecording) {
+        silenceStart = null;
+      }
+    };
+
+    this.vadCheckInterval = setInterval(checkAudioLevel, 100);
   }
 
   async processText(text: string) {
@@ -583,12 +684,19 @@ export class UnifiedPipeline {
     }
   }
 
-  async toggleSTT(enable: boolean) {
+  async toggleSTT(enable: boolean, mode?: "local" | "api") {
     this.state.features.enableSTT = enable;
-    if (enable && !this.audioContext) {
-      await this.setupAudioContexts();
-    } else if (!enable && this.audioContext) {
+    if (mode) {
+      this.state.features.sttMode = mode;
+    }
+
+    // tear down existing audio contexts when toggling
+    if (this.audioContext || this.mediaStream) {
       this.disposeAudioContexts();
+    }
+
+    if (enable) {
+      await this.setupAudioContexts();
     }
   }
 
@@ -616,6 +724,14 @@ export class UnifiedPipeline {
       this.state.isRecording = false;
       this.worker.postMessage({ type: "stop_recording" });
     }
+    if (this.vadCheckInterval) {
+      clearInterval(this.vadCheckInterval);
+      this.vadCheckInterval = null;
+    }
+    if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
+      this.mediaRecorder.stop();
+      this.mediaRecorder = null;
+    }
     if (this.mediaStream) {
       this.mediaStream.getTracks().forEach((track) => track.stop());
       this.mediaStream = null;
@@ -628,6 +744,7 @@ export class UnifiedPipeline {
       this.playbackNode.disconnect();
       this.playbackNode = null;
     }
+    this.audioChunks = [];
   }
 
   dispose() {
