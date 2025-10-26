@@ -157,7 +157,7 @@ export class UnifiedPipeline {
         return;
       }
 
-      if (isUntrained && !this.isProcessingWithUntrainedWorker && data.type !== "status" && data.type !== "info") {
+      if (isUntrained && !this.isProcessingWithUntrainedWorker && data.type !== "status" && data.type !== "info" && data.type !== "output_mp3") {
         return;
       }
 
@@ -278,8 +278,12 @@ export class UnifiedPipeline {
       const audioBuffer = await this.audioContext.decodeAudioData(data.audioBuffer);
       const float32Array = audioBuffer.getChannelData(0);
 
-      if (!this.state.features.enableSTT) {
-        // if no STT, play directly on main thread
+      // Use worklet only for local STT mode (which needs VAD integration)
+      // For API STT or no STT, play directly on main thread
+      const useWorklet = this.state.features.enableSTT && this.state.features.sttMode === "local" && this.playbackNode;
+
+      if (!useWorklet) {
+        // Play directly on main thread
         const source = this.audioContext.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(this.audioContext.destination);
@@ -293,15 +297,16 @@ export class UnifiedPipeline {
           if (this.worker) {
             this.worker.postMessage({ type: "playback_ended" });
           }
+          if (this.untrainedWorker) {
+            this.untrainedWorker.postMessage({ type: "playback_ended" });
+          }
           if (this.eventTracker.hasActiveTurn()) {
             this.eventTracker.addEvent("AudioPlaybackEnd");
             this.callbacks.onEventData?.(this.eventTracker.getData());
           }
         };
-      }
-
-      // send playback to worklet
-      else if (this.state.features.enableSTT && this.playbackNode) {
+      } else {
+        // Send playback to worklet (local STT mode only)
         if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
           this.hasStartedPlayback = true;
           this.eventTracker.addEvent("AudioPlaybackStart");
@@ -310,7 +315,7 @@ export class UnifiedPipeline {
         this.state.isPlaying = true;
         this.playbackNode.port.postMessage(float32Array);
       }
-      
+
     } catch (error) {
       console.error('Error decoding MP3:', error);
     }
@@ -635,14 +640,14 @@ export class UnifiedPipeline {
   private async processTextWithGeminiStandalone(text: string) {
     this.state.isProcessing = true;
     this.state.currentMessageId = null;
-    
+
     if (!this.eventTracker.hasActiveTurn()) {
       this.startNewTurn();
     }
-    
+
     const userMessageId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
     this.callbacks.onMessageReceived?.("user", text, userMessageId);
-    
+
     if (this.eventTracker.hasActiveTurn()) {
       this.eventTracker.addEvent("UserInputReceived", { text });
       this.callbacks.onEventData?.(this.eventTracker.getData());
@@ -684,6 +689,43 @@ export class UnifiedPipeline {
         this.callbacks.onMessageReceived?.("assistant", fullResponse, assistantMessageId);
       }
 
+      // Handle TTS if enabled
+      if (this.state.features.enableTTS && fullResponse.trim()) {
+        try {
+          const ttsResponse = await fetch('/api/elevenlabs-tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              text: fullResponse.trim(),
+              voice_id: "21m00Tcm4TlvDq8ikWAM" // Rachel voice
+            })
+          });
+
+          if (ttsResponse.ok) {
+            const arrayBuffer = await ttsResponse.arrayBuffer();
+
+            // Play audio
+            if (!this.audioContext) {
+              this.audioContext = new AudioContext({ sampleRate: 24000 });
+            }
+
+            const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+            const source = this.audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(this.audioContext.destination);
+            source.start();
+
+            source.onended = () => {
+              this.state.isPlaying = false;
+            };
+
+            this.state.isPlaying = true;
+          }
+        } catch (ttsError) {
+          console.error('TTS error:', ttsError);
+        }
+      }
+
       this.callbacks.onStatusChange?.("response_complete", "");
       this.state.isProcessing = false;
 
@@ -718,7 +760,7 @@ export class UnifiedPipeline {
     this.untrainedWorker.postMessage({
       type: "process_text",
       text: text.trim(),
-      enableTTS: false,
+      enableTTS: this.state.features.enableTTS,
       enableThoughts: false,
       enableSmolLM: true,
     });
@@ -800,6 +842,9 @@ export class UnifiedPipeline {
   clearMessages() {
     if (this.worker) {
       this.worker.postMessage({ type: "end_call" });
+    }
+    if (this.untrainedWorker) {
+      this.untrainedWorker.postMessage({ type: "end_call" });
     }
   }
 

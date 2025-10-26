@@ -46815,7 +46815,7 @@ ${fake_token_around_image}${global_img_token}` + image_token.repeat(image_seq_le
       return isSpeech > SPEECH_THRESHOLD || isRecording && isSpeech >= EXIT_THRESHOLD;
     }
     const generateResponse = async (userInput, splitter) => {
-      let contextPrompt = "";
+      let contextPrompt = "<|im_start|>user\nYou are a helpful assistant, who responds in very brief responses, in sentences, not bullet points.<|im_end|>\n<|im_start|>assistant\nOkay, I understand.<|im_end|>\n";
       for (const msg of messages) {
         contextPrompt += `<|im_start|>${msg.role}
 ${msg.content}<|im_end|>
@@ -46834,7 +46834,7 @@ ${msg.content}<|im_end|>
       const inputs = tokenizer(contextPrompt);
       const outputs = await llm.generate({
         ...inputs,
-        max_new_tokens: 256,
+        max_new_tokens: 128,
         temperature: 1,
         do_sample: false,
         pad_token_id: tokenizer.pad_token_id,
