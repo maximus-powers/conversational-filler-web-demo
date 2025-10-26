@@ -558,7 +558,14 @@ export function Chat({
       if (smolLMMode === "untrained" && untrainedPipelineRef.current) {
         await untrainedPipelineRef.current.processText(currentInput);
       } else if (pipelineRef.current) {
-        await pipelineRef.current.processText(currentInput);
+        if (showSideBySide) {
+          await pipelineRef.current.processText(currentInput, {
+            enableThoughts: true,
+            smolLMMode: "convfill",
+          });
+        } else {
+          await pipelineRef.current.processText(currentInput);
+        }
       } else {
         // todo: remove this
 

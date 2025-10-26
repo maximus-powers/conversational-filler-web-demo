@@ -595,8 +595,8 @@ export class UnifiedPipeline {
     this.vadCheckInterval = setInterval(checkAudioLevel, 100);
   }
 
-  async processText(text: string) {
-    const config = this.state.features;
+  async processText(text: string, featureOverrides?: Partial<PipelineState['features']>) {
+    const config = { ...this.state.features, ...featureOverrides };
 
     if (config.smolLMMode === "none" && config.enableThoughts) {
       return this.processTextWithGeminiStandalone(text);
