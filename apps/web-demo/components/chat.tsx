@@ -4,7 +4,7 @@ import { Button } from "@convo-filler/ui/components/button";
 import { useState, useRef, useEffect } from "react";
 import { Loader2, Send, Eye, EyeOff } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
-import { UnifiedPipeline, PipelineState } from "../app/lib/unified-pipeline";
+import { UnifiedPipeline, UntrainedPipeline, PipelineState } from "../app/lib/unified-pipeline";
 import { Timeline } from "./timeline";
 import { PipelineControls } from "./pipeline-controls";
 import { StatsPanel } from "./stats-panel";
@@ -75,8 +75,12 @@ export function Chat({
   const [untrainedMessages, setUntrainedMessages] = useState<Message[]>([]);
   const [isUntrainedLoading, setIsUntrainedLoading] = useState(false);
 
+  // Column widths for side-by-side mode (percentages)
+  const [columnWidths, setColumnWidths] = useState([33.33, 33.33, 33.34]);
+  const [isDragging, setIsDragging] = useState<number | null>(null);
+
   const pipelineRef = useRef<UnifiedPipeline | null>(null);
-  const untrainedPipelineRef = useRef<UnifiedPipeline | null>(null);
+  const untrainedPipelineRef = useRef<UntrainedPipeline | null>(null);
   const messagesRef = useRef<Map<string, Message>>(new Map());
   const untrainedMessagesRef = useRef<Map<string, Message>>(new Map());
   const currentUserPromptRef = useRef<string>("");
@@ -93,6 +97,65 @@ export function Chat({
       pipelineRef.current.resetEventData();
     }
   };
+
+  // Handle column resizing for side-by-side mode
+  const handleMouseDown = (index: number) => {
+    setIsDragging(index);
+  };
+
+  useEffect(() => {
+    if (isDragging === null) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const container = document.getElementById('side-by-side-container');
+      if (!container) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const mouseX = e.clientX - containerRect.left;
+      const percentage = (mouseX / containerRect.width) * 100;
+
+      setColumnWidths((prev) => {
+        const newWidths = [...prev];
+        const minWidth = 15;
+
+        if (isDragging === 0) {
+          // Resizing first divider (between Gemini and Untrained)
+          const availableWidth = 100 - prev[2];
+          const newFirstWidth = Math.max(minWidth, Math.min(availableWidth - minWidth, percentage));
+          const newSecondWidth = availableWidth - newFirstWidth;
+
+          newWidths[0] = newFirstWidth;
+          newWidths[1] = newSecondWidth;
+          newWidths[2] = prev[2]; // Keep ConvFill column fixed
+        } else if (isDragging === 1) {
+          // Resizing second divider (between Untrained and ConvFill)
+          const availableWidth = 100 - prev[0];
+          const secondColumnStart = prev[0];
+          const relativePercentage = percentage - secondColumnStart;
+          const newSecondWidth = Math.max(minWidth, Math.min(availableWidth - minWidth, relativePercentage));
+          const newThirdWidth = availableWidth - newSecondWidth;
+
+          newWidths[0] = prev[0]; // Keep Gemini column fixed
+          newWidths[1] = newSecondWidth;
+          newWidths[2] = newThirdWidth;
+        }
+
+        return newWidths;
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(null);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging]);
 
 
   const handleResponseComplete = (_messageId: string, fullResponse: string, userPrompt?: string) => {
@@ -264,24 +327,8 @@ export function Chat({
       pipelineCallbacksRef.current = callbacks;
       pipelineRef.current = new UnifiedPipeline(callbacks, pipelineFeatures);
 
-      const untrainedFeatures: PipelineState['features'] = {
-        enableSTT: false,
-        enableThoughts: false,
-        smolLMMode: "untrained",
-        enableTTS: false,
-        persona: "none",
-      };
-      untrainedPipelineRef.current = new UnifiedPipeline(
-        callbacks,
-        untrainedFeatures,
-        "HuggingFaceTB/SmolLM-360M-Instruct"
-      );
-
       try {
-        await Promise.all([
-          pipelineRef.current.initialize(),
-          untrainedPipelineRef.current.initialize()
-        ]);
+        await pipelineRef.current.initialize();
 
         const initEndTime = Date.now();
         const loadTime = ((initEndTime - initStartTime) / 1000).toFixed(2);
@@ -431,17 +478,16 @@ export function Chat({
   const processUntrainedModel = async (userInput: string) => {
     setIsUntrainedLoading(true);
 
-    // init a separate worker for the untrained model
-    if (!untrainedPipelineRef.current) {
-      const untrainedFeatures: PipelineState['features'] = {
-        enableSTT: false,
-        enableThoughts: false,
-        smolLMMode: "untrained",
-        enableTTS: false,
-        persona: "none",
-      };
+    // Initialize untrained pipeline if needed (lazily on first use)
+    if (!untrainedPipelineRef.current && pipelineRef.current) {
+      const sharedWorker = pipelineRef.current.getUntrainedWorker();
+      if (!sharedWorker || !pipelineRef.current.isUntrainedWorkerInitialized()) {
+        console.error("Untrained worker not ready");
+        setIsUntrainedLoading(false);
+        return;
+      }
 
-      untrainedPipelineRef.current = new UnifiedPipeline({
+      untrainedPipelineRef.current = new UntrainedPipeline(sharedWorker, {
         onMessageReceived: (role: "user" | "assistant", content: string, messageId?: string) => {
           const message: Message = {
             id: messageId || `untrained-${Date.now()}`,
@@ -449,51 +495,36 @@ export function Chat({
             content,
             processedContent: content,
           };
+
           if (messageId) {
             untrainedMessagesRef.current.set(messageId, message);
           }
+
           setUntrainedMessages((prev) => {
             const existing = prev.find((m) => m.id === message.id);
-            if (existing) {
-              return prev.map((m) => (m.id === message.id ? message : m));
-            }
-            return [...prev, message];
+            return existing
+              ? prev.map((m) => (m.id === message.id ? message : m))
+              : [...prev, message];
           });
 
           if (role === "assistant") {
             setIsUntrainedLoading(false);
           }
         },
+        onMessageUpdated: (messageId: string, content: string) => {
+          const updatedMessage: Message = {
+            id: messageId,
+            role: "assistant",
+            content,
+            processedContent: content,
+          };
 
-        onMessageUpdated: (messageId: string, newContent: string) => {
+          untrainedMessagesRef.current.set(messageId, updatedMessage);
           setUntrainedMessages((prev) =>
-            prev.map((msg) => {
-              if (msg.id === messageId) {
-                const currentContent = msg.processedContent || msg.content;
-                const updatedMessage = {
-                  ...msg,
-                  processedContent: currentContent + " " + newContent,
-                };
-                untrainedMessagesRef.current.set(messageId, updatedMessage);
-                return updatedMessage;
-              }
-              return msg;
-            }),
+            prev.map((msg) => (msg.id === messageId ? updatedMessage : msg))
           );
         },
-
-        onStatusChange: (status: string, message: string) => {
-          console.log("Untrained pipeline status:", status, message);
-        },
-      }, untrainedFeatures, "HuggingFaceTB/SmolLM-360M-Instruct"); 
-
-      try {
-        await untrainedPipelineRef.current.initialize();
-      } catch (error) {
-        console.error("Failed to initialize untrained pipeline:", error);
-        setIsUntrainedLoading(false);
-        return;
-      }
+      });
     }
 
     try {
@@ -694,9 +725,64 @@ export function Chat({
         )}
 
         {/* Messages */}
-        <div className="flex-1 flex overflow-hidden">
+        <div id="side-by-side-container" className="flex-1 flex overflow-hidden" style={{ position: 'relative' }}>
+          {/* Gemini Side */}
+          {showSideBySide && (
+            <div
+              className="flex flex-col border-r"
+              style={{ width: `${columnWidths[0]}%` }}
+            >
+              <MessageList
+                messages={comparisonMessages}
+                isLoading={isComparisonLoading}
+                showThoughts={false}
+                title="Gemini"
+                isEmpty={comparisonMessages.length === 0}
+                emptyMessage="Comparison responses will appear here"
+              />
+            </div>
+          )}
+
+          {/* Resize Handle 1 */}
+          {showSideBySide && (
+            <div
+              className="w-1 bg-border hover:bg-blue-500 cursor-col-resize flex-shrink-0 transition-colors"
+              onMouseDown={() => handleMouseDown(0)}
+              style={{ cursor: 'col-resize' }}
+            />
+          )}
+
+          {/* Untrained SmolLM Side */}
+          {showSideBySide && (
+            <div
+              className="flex flex-col border-r"
+              style={{ width: `${columnWidths[1]}%` }}
+            >
+              <MessageList
+                messages={untrainedMessages}
+                isLoading={isUntrainedLoading}
+                showThoughts={false}
+                title="SmolLM (Untrained)"
+                isEmpty={untrainedMessages.length === 0}
+                emptyMessage="Untrained model responses will appear here"
+              />
+            </div>
+          )}
+
+          {/* Resize Handle 2 */}
+          {showSideBySide && (
+            <div
+              className="w-1 bg-border hover:bg-blue-500 cursor-col-resize flex-shrink-0 transition-colors"
+              onMouseDown={() => handleMouseDown(1)}
+              style={{ cursor: 'col-resize' }}
+            />
+          )}
+
           {/* ConvFill Side */}
-          <div className={`flex-1 flex flex-col ${showSideBySide ? "border-r" : ""}`}>
+          <div
+            className="flex flex-col"
+            style={{ width: showSideBySide ? `${columnWidths[2]}%` : '100%' }}
+          >
             <MessageList
               messages={messages}
               isLoading={isLoading}
@@ -711,34 +797,6 @@ export function Chat({
               modelLoadingProgress={modelLoadingProgress}
             />
           </div>
-
-          {/* Gemini Side */}
-          {showSideBySide && (
-            <div className="flex-1 flex flex-col border-r">
-              <MessageList
-                messages={comparisonMessages}
-                isLoading={isComparisonLoading}
-                showThoughts={false}
-                title="Gemini"
-                isEmpty={comparisonMessages.length === 0}
-                emptyMessage="Comparison responses will appear here"
-              />
-            </div>
-          )}
-
-          {/* Untrained SmolLM Side */}
-          {showSideBySide && (
-            <div className="flex-1 flex flex-col">
-              <MessageList
-                messages={untrainedMessages}
-                isLoading={isUntrainedLoading}
-                showThoughts={false}
-                title="SmolLM (Untrained)"
-                isEmpty={untrainedMessages.length === 0}
-                emptyMessage="Untrained model responses will appear here"
-              />
-            </div>
-          )}
         </div>
 
         {/* Input Box */}

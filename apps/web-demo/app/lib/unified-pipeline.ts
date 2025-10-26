@@ -37,6 +37,7 @@ export interface PipelineState {
 
 export class UnifiedPipeline {
   private worker: Worker | null = null;
+  private untrainedWorker: Worker | null = null;
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private worklet: AudioWorkletNode | null = null;
@@ -44,12 +45,14 @@ export class UnifiedPipeline {
   private callbacks: PipelineCallbacks;
   private state: PipelineState;
   private isWorkerReady = false;
+  private isUntrainedWorkerReady = false;
   private eventTracker = new EventTracker();
   private hasStartedPlayback = false;
   private modelId?: string;
   private mediaRecorder: MediaRecorder | null = null;
   private audioChunks: Blob[] = [];
   private vadCheckInterval: NodeJS.Timeout | null = null;
+  private isProcessingWithUntrainedWorker = false;
 
   constructor(callbacks: PipelineCallbacks, features?: PipelineState['features'], modelId?: string) {
     this.callbacks = callbacks;
@@ -76,35 +79,40 @@ export class UnifiedPipeline {
   async initialize() {
 
     try {
-      // force reload of worker
-      const isUntrainedModel = this.modelId === "HuggingFaceTB/SmolLM-360M-Instruct" ||
-                               this.state.features.smolLMMode === "untrained";
-      const workerFile = isUntrainedModel ? "speech-worker-untrained-bundled.js" : "speech-worker-bundled.js";
-      const workerUrl = `/${workerFile}?v=${Date.now()}`;
-      this.worker = new Worker(workerUrl);
-      this.setupWorkerListeners();
+      // trained worker (ConvFill with thoughts)
+      const trainedWorkerUrl = `/speech-worker-bundled.js?v=${Date.now()}`;
+      this.worker = new Worker(trainedWorkerUrl);
+      this.setupWorkerListeners(this.worker, false);
+
+      // untrained worker
+      const untrainedWorkerUrl = `/speech-worker-untrained-bundled.js?v=${Date.now()}`;
+      this.untrainedWorker = new Worker(untrainedWorkerUrl);
+      this.setupWorkerListeners(this.untrainedWorker, true);
 
       if (this.state.features.enableSTT) {
         await this.setupAudioContexts();
       }
 
+      // init trained worker
       let targetModelId = this.modelId;
-      if (!targetModelId && this.state.features.smolLMMode === "untrained") {
-        targetModelId = "HuggingFaceTB/SmolLM-360M-Instruct";
-      }
-
       this.worker.postMessage({
         type: "init",
         modelId: targetModelId
       });
 
-      // wait for worker to be ready
+      // init untrained worker
+      this.untrainedWorker.postMessage({
+        type: "init",
+        modelId: "HuggingFaceTB/SmolLM-360M-Instruct"
+      });
+
+      // wait for both to be ready
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("Worker initialization timed out"));
         }, 60000);
         const checkReady = () => {
-          if (this.isWorkerReady) {
+          if (this.isWorkerReady && this.isUntrainedWorkerReady) {
             clearTimeout(timeout);
             resolve();
           } else {
@@ -123,6 +131,13 @@ export class UnifiedPipeline {
         this.worker.postMessage({ type: "set_persona", persona: features.persona });
       }
 
+      if (this.untrainedWorker) {
+        this.untrainedWorker.postMessage({ type: "set_thought_provider", provider: "none" });
+        this.untrainedWorker.postMessage({ type: "set_smollm_enabled", enabled: true });
+        this.untrainedWorker.postMessage({ type: "set_tts_enabled", enabled: false });
+        this.untrainedWorker.postMessage({ type: "set_persona", persona: "none" });
+      }
+
       this.state.isReady = true;
     } catch (error) {
       console.error("Failed to initialize:", error);
@@ -130,23 +145,28 @@ export class UnifiedPipeline {
     }
   }
 
-  private setupWorkerListeners() {
-    if (!this.worker) return;
-    this.worker.onerror = (error) => {
-      console.error("Worker error:", error);
+  private setupWorkerListeners(worker: Worker, isUntrained: boolean) {
+    if (!worker) return;
+    worker.onerror = (error) => {
+      console.error(`${isUntrained ? 'Untrained' : 'Trained'} worker error:`, error);
     };
 
-    this.worker.onmessage = ({ data }) => {
+    worker.onmessage = ({ data }) => {
       if (data.error) {
         console.error("Worker error:", data.error);
         return;
       }
+
+      if (isUntrained && !this.isProcessingWithUntrainedWorker && data.type !== "status" && data.type !== "info") {
+        return;
+      }
+
       switch (data.type) {
         case "info":
           console.log("Worker info:", data.message);
           break;
         case "status":
-          this.handleStatusMessage(data);
+          this.handleStatusMessage(data, isUntrained);
           break;
         case "output":
           this.handleAudioOutput(data);
@@ -207,10 +227,14 @@ export class UnifiedPipeline {
     };
   }
 
-  private handleStatusMessage(data: any) {
+  private handleStatusMessage(data: any, isUntrained: boolean) {
     if (data.status === "ready") {
-      this.isWorkerReady = true;
-      this.state.voices = data.voices || {};
+      if (isUntrained) {
+        this.isUntrainedWorkerReady = true;
+      } else {
+        this.isWorkerReady = true;
+        this.state.voices = data.voices || {};
+      }
     } else if (data.status === "recording_start") {
       this.state.isRecording = true;
       if (this.eventTracker.hasActiveTurn()) {
@@ -326,6 +350,10 @@ export class UnifiedPipeline {
         this.state.currentMessageId,
       );
       shouldSendMessageId = true;
+
+      if (this.isProcessingWithUntrainedWorker) {
+        this.isProcessingWithUntrainedWorker = false;
+      }
     } else {
       if (this.state.currentMessageId) {
         this.callbacks.onMessageUpdated?.(
@@ -669,6 +697,7 @@ export class UnifiedPipeline {
   private async processTextWithUntrainedSmolLM(text: string) {
     this.state.isProcessing = true;
     this.state.currentMessageId = null;
+    this.isProcessingWithUntrainedWorker = true;
 
     if (!this.eventTracker.hasActiveTurn()) {
       this.startNewTurn();
@@ -682,21 +711,42 @@ export class UnifiedPipeline {
       this.callbacks.onEventData?.(this.eventTracker.getData());
     }
 
-    if (!this.worker || !this.isWorkerReady) {
+    if (!this.untrainedWorker || !this.isUntrainedWorkerReady) {
       throw new Error("Untrained worker not ready");
     }
 
-    this.worker.postMessage({
+    this.untrainedWorker.postMessage({
       type: "process_text",
       text: text.trim(),
-      enableTTS: this.state.features.enableTTS,
+      enableTTS: false,
       enableThoughts: false,
       enableSmolLM: true,
     });
   }
 
+  getCallbacks(): PipelineCallbacks {
+    return this.callbacks;
+  }
+
+  setCallbacks(callbacks: PipelineCallbacks) {
+    this.callbacks = callbacks;
+  }
+
+  getFeatures(): PipelineState['features'] {
+    return this.state.features;
+  }
+
+  getUntrainedWorker(): Worker | null {
+    return this.untrainedWorker;
+  }
+
+  isUntrainedWorkerInitialized(): boolean {
+    return this.isUntrainedWorkerReady;
+  }
+
   updateFeatures(features: Partial<PipelineState['features']>) {
     this.state.features = { ...this.state.features, ...features };
+
     if (this.worker) {
       if (features.enableThoughts !== undefined) {
         const provider = features.enableThoughts ? "gemini" : "none";
@@ -796,5 +846,81 @@ export class UnifiedPipeline {
     this.state.isProcessing = false;
     this.state.isRecording = false;
     this.state.isPlaying = false;
+  }
+}
+
+/**
+ * Lightweight pipeline wrapper for side-by-side untrained model comparison.
+ * Shares the untrained worker from the main pipeline but maintains separate message handling.
+ */
+export class UntrainedPipeline {
+  private readonly worker: Worker;
+  private readonly callbacks: PipelineCallbacks;
+  private currentMessageId: string | null = null;
+  private messageHandler: ((event: MessageEvent) => void) | null = null;
+  private expectingResponse = false;
+
+  constructor(sharedWorker: Worker, callbacks: PipelineCallbacks) {
+    this.worker = sharedWorker;
+    this.callbacks = callbacks;
+    this.setupWorkerListeners();
+  }
+
+  private setupWorkerListeners(): void {
+    this.messageHandler = ({ data }: MessageEvent) => {
+      if (!this.expectingResponse || data.type !== "smollm_response") {
+        return;
+      }
+
+      this.handleSmolLMResponse(data);
+    };
+
+    this.worker.addEventListener('message', this.messageHandler);
+  }
+
+  private handleSmolLMResponse(data: any): void {
+    const response = data.response || data.content;
+
+    if (data.isInitialResponse) {
+      this.currentMessageId = this.generateMessageId();
+      this.callbacks.onMessageReceived?.("assistant", response, this.currentMessageId);
+      // Reset flag after receiving complete response
+      this.expectingResponse = false;
+    } else if (this.currentMessageId) {
+      this.callbacks.onMessageUpdated?.(this.currentMessageId, response);
+    }
+  }
+
+  private generateMessageId(): string {
+    return `untrained-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+
+  async processText(text: string): Promise<void> {
+    this.currentMessageId = null;
+    this.expectingResponse = true;
+
+    const userMessageId = this.generateMessageId();
+    this.callbacks.onMessageReceived?.("user", text, userMessageId);
+
+    this.worker.postMessage({
+      type: "process_text",
+      text: text.trim(),
+      enableTTS: false,
+      enableThoughts: false,
+      enableSmolLM: true,
+    });
+  }
+
+  clearMessages(): void {
+    this.expectingResponse = false;
+    this.worker.postMessage({ type: "end_call" });
+  }
+
+  dispose(): void {
+    if (this.messageHandler) {
+      this.worker.removeEventListener('message', this.messageHandler);
+      this.messageHandler = null;
+    }
+    this.expectingResponse = false;
   }
 }
