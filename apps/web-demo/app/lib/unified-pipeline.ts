@@ -53,6 +53,8 @@ export class UnifiedPipeline {
   private audioChunks: Blob[] = [];
   private vadCheckInterval: NodeJS.Timeout | null = null;
   private isProcessingWithUntrainedWorker = false;
+  private audioQueue: Array<{ audioBuffer: AudioBuffer; float32Array: Float32Array }> = [];
+  private isPlayingAudio = false;
 
   constructor(callbacks: PipelineCallbacks, features?: PipelineState['features'], modelId?: string) {
     this.callbacks = callbacks;
@@ -278,46 +280,79 @@ export class UnifiedPipeline {
       const audioBuffer = await this.audioContext.decodeAudioData(data.audioBuffer);
       const float32Array = audioBuffer.getChannelData(0);
 
-      // Use worklet only for local STT mode (which needs VAD integration)
-      // For API STT or no STT, play directly on main thread
-      const useWorklet = this.state.features.enableSTT && this.state.features.sttMode === "local" && this.playbackNode;
+      // Add to queue
+      this.audioQueue.push({ audioBuffer, float32Array });
 
-      if (!useWorklet) {
-        // Play directly on main thread
-        const source = this.audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(this.audioContext.destination);
-        source.start();
-        if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
-          this.hasStartedPlayback = true;
-          this.eventTracker.addEvent("AudioPlaybackStart");
-          this.callbacks.onEventData?.(this.eventTracker.getData());
-        }
-        source.onended = () => {
-          if (this.worker) {
-            this.worker.postMessage({ type: "playback_ended" });
-          }
-          if (this.untrainedWorker) {
-            this.untrainedWorker.postMessage({ type: "playback_ended" });
-          }
-          if (this.eventTracker.hasActiveTurn()) {
-            this.eventTracker.addEvent("AudioPlaybackEnd");
-            this.callbacks.onEventData?.(this.eventTracker.getData());
-          }
-        };
-      } else {
-        // Send playback to worklet (local STT mode only)
-        if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
-          this.hasStartedPlayback = true;
-          this.eventTracker.addEvent("AudioPlaybackStart");
-          this.callbacks.onEventData?.(this.eventTracker.getData());
-        }
-        this.state.isPlaying = true;
-        this.playbackNode.port.postMessage(float32Array);
+      // Start playing if not already playing
+      if (!this.isPlayingAudio) {
+        this.playNextAudio();
       }
 
     } catch (error) {
       console.error('Error decoding MP3:', error);
+    }
+  }
+
+  private playNextAudio() {
+    // If nothing in queue, mark as not playing and return
+    if (this.audioQueue.length === 0) {
+      this.isPlayingAudio = false;
+      this.state.isPlaying = false;
+      return;
+    }
+
+    // If already playing, don't start another one
+    if (this.isPlayingAudio) {
+      return;
+    }
+
+    this.isPlayingAudio = true;
+    this.state.isPlaying = true;
+    const { audioBuffer, float32Array } = this.audioQueue.shift()!;
+
+    // Use worklet only for local STT mode (which needs VAD integration)
+    // For API STT or no STT, play directly on main thread
+    const useWorklet = this.state.features.enableSTT && this.state.features.sttMode === "local" && this.playbackNode;
+
+    if (!useWorklet) {
+      // Play directly on main thread
+      const source = this.audioContext!.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(this.audioContext!.destination);
+      source.start();
+      if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
+        this.hasStartedPlayback = true;
+        this.eventTracker.addEvent("AudioPlaybackStart");
+        this.callbacks.onEventData?.(this.eventTracker.getData());
+      }
+      source.onended = () => {
+        this.isPlayingAudio = false;
+        this.state.isPlaying = false;
+
+        if (this.worker) {
+          this.worker.postMessage({ type: "playback_ended" });
+        }
+        if (this.untrainedWorker) {
+          this.untrainedWorker.postMessage({ type: "playback_ended" });
+        }
+        if (this.audioQueue.length === 0 && this.eventTracker.hasActiveTurn()) {
+          this.eventTracker.addEvent("AudioPlaybackEnd");
+          this.callbacks.onEventData?.(this.eventTracker.getData());
+        }
+        // Play next audio in queue
+        this.playNextAudio();
+      };
+    } else {
+      // Send playback to worklet (local STT mode only)
+      if (!this.hasStartedPlayback && this.eventTracker.hasActiveTurn()) {
+        this.hasStartedPlayback = true;
+        this.eventTracker.addEvent("AudioPlaybackStart");
+        this.callbacks.onEventData?.(this.eventTracker.getData());
+      }
+      if (this.playbackNode) {
+        this.playbackNode.port.postMessage(float32Array);
+      }
+      // Note: isPlayingAudio will be set to false in the worklet's onmessage handler
     }
   }
 
@@ -442,17 +477,21 @@ export class UnifiedPipeline {
     // listen for playback ended and notify worker
     this.playbackNode.port.onmessage = (event) => {
       if (event.data.type === "playback_ended") {
+        this.isPlayingAudio = false;
         this.state.isPlaying = false;
-        this.hasStartedPlayback = false; 
-        
-        if (this.eventTracker.hasActiveTurn()) {
+        this.hasStartedPlayback = false;
+
+        if (this.audioQueue.length === 0 && this.eventTracker.hasActiveTurn()) {
           this.eventTracker.addEvent("AudioPlaybackEnd");
           this.callbacks.onEventData?.(this.eventTracker.getData());
         }
-        
+
         if (this.worker) {
           this.worker.postMessage({ type: "playback_ended" });
         }
+
+        // Play next audio in queue
+        this.playNextAudio();
       }
     };
 
@@ -704,22 +743,21 @@ export class UnifiedPipeline {
           if (ttsResponse.ok) {
             const arrayBuffer = await ttsResponse.arrayBuffer();
 
-            // Play audio
+            // Play audio using queue system
             if (!this.audioContext) {
               this.audioContext = new AudioContext({ sampleRate: 24000 });
             }
 
             const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
-            const source = this.audioContext.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(this.audioContext.destination);
-            source.start();
+            const float32Array = audioBuffer.getChannelData(0);
 
-            source.onended = () => {
-              this.state.isPlaying = false;
-            };
+            // Add to queue
+            this.audioQueue.push({ audioBuffer, float32Array });
 
-            this.state.isPlaying = true;
+            // Start playing if not already playing
+            if (!this.isPlayingAudio) {
+              this.playNextAudio();
+            }
           }
         } catch (ttsError) {
           console.error('TTS error:', ttsError);
@@ -846,6 +884,9 @@ export class UnifiedPipeline {
     if (this.untrainedWorker) {
       this.untrainedWorker.postMessage({ type: "end_call" });
     }
+    // Clear audio queue
+    this.audioQueue = [];
+    this.isPlayingAudio = false;
   }
 
   private disposeAudioContexts() {
@@ -874,6 +915,8 @@ export class UnifiedPipeline {
       this.playbackNode = null;
     }
     this.audioChunks = [];
+    this.audioQueue = [];
+    this.isPlayingAudio = false;
   }
 
   dispose() {
